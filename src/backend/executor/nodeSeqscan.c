@@ -34,6 +34,9 @@
 #include "executor/nodeSeqscan.h"
 #include "utils/rel.h"
 
+//added headers
+#include "utils/elog.h"
+
 static TupleTableSlot *SeqNext(SeqScanState *node);
 
 /* ----------------------------------------------------------------
@@ -50,6 +53,11 @@ static TupleTableSlot *SeqNext(SeqScanState *node);
 static pg_attribute_always_inline TupleTableSlot *
 SeqNext(SeqScanState *node)
 {
+
+	//adding check
+	if(node->ss.ps.ps_ProjInfo == NULL) {
+		elog(LOG,"Automatic Indexer : Sequential scan detected on relation OID %u\n", node->ss.ss_currentRelation->rd_id);
+	}
 	TableScanDesc scandesc;
 	EState	   *estate;
 	ScanDirection direction;

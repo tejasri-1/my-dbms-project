@@ -1,0 +1,1 @@
+SELECT * FROM online_retail WHERE CustomerID = 14911;
