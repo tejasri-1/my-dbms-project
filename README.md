@@ -1,6 +1,7 @@
 PostgreSQL Database Management System
 =====================================
 
+this is dbms lab project 
 This directory contains the source code distribution of the PostgreSQL
 database management system.
 
