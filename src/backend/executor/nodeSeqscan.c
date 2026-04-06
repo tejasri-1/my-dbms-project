@@ -40,6 +40,7 @@
 #include "utils/lsyscache.h"
 #include "catalog/pg_operator.h"
 #include "nodes/pathnodes.h"
+#include "utils/auto_indexer.h"
 
 // #include "nodes/nodeFuncs.h"
 // #include "nodes/pg_list.h"
@@ -404,20 +405,35 @@ if (qualstate != NULL)
 
                     if (opname && strcmp(opname, "=") == 0)
                     {
-						elog(LOG, "DEBUG: Found an equality operator in qual");
-                        Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
-                        char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
-                        double cost = node->scan.plan.total_cost;
+						Node *left = linitial(op->args);   // <-- YOU DECLARE IT HERE
 
-                       // elog(LOG, "============================================");
-                        elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
-                        // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
-                        // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
-                        //elog(LOG, "============================================");
+						if (IsA(left, Var))
+						{
+							Var *var = (Var *) left;
+
+							AutoIndex_Update(
+								RelationGetRelid(scanstate->ss.ss_currentRelation),
+								var->varattno
+							);
+
+							elog(LOG, "[AUTO-INDEXER] Equality detected");
+						}
+					
+					// elog(LOG, "DEBUG: Found an equality operator in qual");
+                    //     Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
+                    //     char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
+                    //     double cost = node->scan.plan.total_cost;
+
+                    //    // elog(LOG, "============================================");
+                    //     elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
+                    //     // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
+                    //     // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
+                    //     //elog(LOG, "============================================");
                     }
 					else {
 						elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");
 					}
+					break;
                 }
 				else {
 					elog(LOG, "DEBUG: Clause is not an OpExpr, found clause of type: %s", nodeToString(clause));
@@ -438,15 +454,30 @@ if (qualstate != NULL)
 		elog(LOG, "DEBUG: Qual is an OpExpr, checking operator type");
         if (opname && strcmp(opname, "=") == 0)
         {
-            Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
-            char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
-            double cost = node->scan.plan.total_cost;
 
-            elog(LOG, "============================================");
-            elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
-            elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
-            elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
-            elog(LOG, "============================================");
+            Node *left = linitial(op->args);
+
+            if (IsA(left, Var))
+            {
+                Var *var = (Var *) left;
+
+                AutoIndex_Update(
+                    RelationGetRelid(scanstate->ss.ss_currentRelation),
+                    var->varattno
+                );
+
+                elog(LOG, "[AUTO-INDEXER] Equality detected");
+            }
+
+            // Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
+            // char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
+            // double cost = node->scan.plan.total_cost;
+
+            // elog(LOG, "============================================");
+            // elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
+            // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
+            // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
+            // elog(LOG, "============================================");
         }
 		else {
 			elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");

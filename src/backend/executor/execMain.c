@@ -64,7 +64,7 @@
 #include "utils/partcache.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
-
+#include "utils/auto_indexer.h"
 
 /* Hooks for plugins to get control in ExecutorStart/Run/Finish/End */
 ExecutorStart_hook_type ExecutorStart_hook = NULL;
@@ -504,6 +504,9 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
 	ExecEndPlan(queryDesc->planstate, estate);
+
+	//added line
+	AutoIndex_Print();
 
 	/* do away with our snapshots */
 	UnregisterSnapshot(estate->es_snapshot);
