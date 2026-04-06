@@ -36,6 +36,14 @@
 
 //added headers
 #include "utils/elog.h"
+#include "nodes/nodeFuncs.h"
+#include "utils/lsyscache.h"
+#include "catalog/pg_operator.h"
+#include "nodes/pathnodes.h"
+
+// #include "nodes/nodeFuncs.h"
+// #include "nodes/pg_list.h"
+// #include "nodes/primnodes.h"
 
 static TupleTableSlot *SeqNext(SeqScanState *node);
 
@@ -54,10 +62,11 @@ static pg_attribute_always_inline TupleTableSlot *
 SeqNext(SeqScanState *node)
 {
 
+	//elog(LOG,"DEBUG: SeqNext HIT");
 	//adding check
-	if(node->ss.ps.ps_ProjInfo == NULL) {
-		elog(LOG,"Automatic Indexer : Sequential scan detected on relation OID %u\n", node->ss.ss_currentRelation->rd_id);
-	}
+	// if(node->ss.ps.ps_ProjInfo == NULL) {
+	// 	elog(LOG,"Automatic Indexer : Sequential scan detected on relation OID %u\n", node->ss.ss_currentRelation->rd_id);
+	// }
 	TableScanDesc scandesc;
 	EState	   *estate;
 	ScanDirection direction;
@@ -119,7 +128,51 @@ SeqRecheck(SeqScanState *node, TupleTableSlot *slot)
 static TupleTableSlot *
 ExecSeqScan(PlanState *pstate)
 {
+
 	SeqScanState *node = castNode(SeqScanState, pstate);
+		elog(LOG, "DEBUG: ExecSeqScan called");
+
+	//     // --- AUTO INDEXER: Phase 1 Detection --- 
+
+    // Oid relid = node->ss.ss_currentRelation->rd_id;
+
+    // List *qual = node->ss.ps.plan->qual;
+
+    // if (qual != NULL)
+    // {
+    //     ListCell *lc;
+
+    //     foreach(lc, qual)
+    //     {
+    //         Expr *expr = (Expr *) lfirst(lc);
+
+    //         if (IsA(expr, OpExpr))
+    //         {
+    //             OpExpr *op = (OpExpr *) expr;
+
+    //             // Check for binary operator (e.g., col = value)
+    //             if (list_length(op->args) == 2)
+    //             {
+    //                 Node *left = linitial(op->args);
+    //                 Node *right = lsecond(op->args);
+
+    //                 // Check if left side is a column (Var)
+    //                 if (IsA(left, Var))
+    //                 {
+    //                     Var *var = (Var *) left;
+
+    //                     // TEMP: assume '=' operator (we refine later)
+    //                     elog(LOG,
+    //                          "AUTO-INDEXER: Detected predicate on table OID %u, column attno %d",
+    //                          relid,
+    //                          var->varattno);
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+
+	// // --- END AUTO INDEXER: Phase 1 Detection ---
 
 	Assert(pstate->state->es_epq_active == NULL);
 	Assert(pstate->qual == NULL);
@@ -186,6 +239,7 @@ ExecSeqScanWithQualProject(PlanState *pstate)
 {
 	SeqScanState *node = castNode(SeqScanState, pstate);
 
+	elog(LOG, "DEBUG: ExecSeqScanWithQualProject called");
 	Assert(pstate->state->es_epq_active == NULL);
 	pg_assume(pstate->qual != NULL);
 	pg_assume(pstate->ps_ProjInfo != NULL);
@@ -290,6 +344,122 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 		else
 			scanstate->ss.ps.ExecProcNode = ExecSeqScanWithQualProject;
 	}
+
+
+	/* --- BEGIN PHASE 1: THE OBSERVER --- */
+
+	// Check if there are any filter conditions (quals)
+	
+/* --- PHASE 1: THE EQUALITY OBSERVER --- */
+/* --- PHASE 1: THE EQUALITY OBSERVER (FINAL VERSION) --- */
+
+ExprState *qualstate = scanstate->ss.ps.qual;
+elog(LOG,"DEBUG : ExecInitSeqScan called");
+elog(LOG, "DEBUG: Checking for equality conditions in SeqScan qual");
+
+if (qualstate != NULL)
+{
+    //Expr *expr = qualstate->expr;
+
+	Node *expr = (Node *) qualstate->expr;
+
+// elog(LOG, "DEBUG: Raw expr node type: %d", nodeTag(expr));
+// elog(LOG, "DEBUG: Raw expr string: %s", nodeToString(expr));
+    /* 🔥 ADD THIS BLOCK RIGHT HERE */
+	while (expr && IsA(expr, List))
+	{
+	//  elog(LOG, "DEBUG: Expr is a List, unwrapping one level");
+		expr = (Node *) linitial((List *)expr);
+	}
+	/* unwrap RestrictInfo if present */
+	if (expr && IsA(expr, RestrictInfo))
+	{
+		//elog(LOG, "DEBUG: Found RestrictInfo wrapper");
+		expr = (Node *) ((RestrictInfo *)expr)->clause;
+	}
+
+// elog(LOG, "DEBUG: After unwrap node type: %d", nodeTag(expr));
+// elog(LOG, "DEBUG: After unwrap string: %s", nodeToString(expr));
+    /* Handle simple AND conditions (most common case) */
+    if (IsA(expr, BoolExpr))
+    {
+
+        BoolExpr *b = (BoolExpr *) expr;
+		//elog(LOG, "DEBUG: Qual is a BoolExpr, checking for AND conditions");
+
+        if (b->boolop == AND_EXPR)
+        {
+			
+            ListCell *lc;
+			//elog(LOG, "DEBUG: BoolExpr is an AND_EXPR, iterating through arguments");
+            foreach(lc, b->args)
+            {
+                Node *clause = (Node *) lfirst(lc);
+
+                if (IsA(clause, OpExpr))
+                {
+                    OpExpr *op = (OpExpr *) clause;
+
+                    char *opname = get_opname(op->opno);
+
+                    if (opname && strcmp(opname, "=") == 0)
+                    {
+						elog(LOG, "DEBUG: Found an equality operator in qual");
+                        Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
+                        char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
+                        double cost = node->scan.plan.total_cost;
+
+                       // elog(LOG, "============================================");
+                        elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
+                        // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
+                        // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
+                        //elog(LOG, "============================================");
+                    }
+					else {
+						elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");
+					}
+                }
+				else {
+					elog(LOG, "DEBUG: Clause is not an OpExpr, found clause of type: %s", nodeToString(clause));
+				}
+            }
+        }
+		else {
+			elog(LOG, "DEBUG: BoolExpr is not an AND_EXPR, found boolop type: %d", b->boolop);
+		}
+    }
+
+    /* Handle single condition: WHERE col = value */
+    else if (IsA(expr, OpExpr))
+    {
+        OpExpr *op = (OpExpr *) expr;
+
+        char *opname = get_opname(op->opno);
+		elog(LOG, "DEBUG: Qual is an OpExpr, checking operator type");
+        if (opname && strcmp(opname, "=") == 0)
+        {
+            Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
+            char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
+            double cost = node->scan.plan.total_cost;
+
+            elog(LOG, "============================================");
+            elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
+            elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
+            elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
+            elog(LOG, "============================================");
+        }
+		else {
+			elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");
+		}
+    }
+	else{
+		elog(LOG, "DEBUG: Qual is neither a BoolExpr nor an OpExpr, found qual of type: %s", nodeToString(expr));
+	}
+}
+else {
+	elog(LOG, "DEBUG: No qual conditions found in SeqScan");
+}
+//---end of adding
 
 	return scanstate;
 }

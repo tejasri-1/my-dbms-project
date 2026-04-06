@@ -33,6 +33,9 @@ mkdir ~/my_test_db
 # Start the server
 /usr/local/pgsql/bin/postgres -D ~/my_test_db
 
+if any postgres conflict with other 
+sudo systemctl stop postgresql
+
 # Step 1: Open a new terminal and connect
 
 (Keep the server terminal running)
@@ -50,8 +53,16 @@ CREATE TABLE online_retail (
     country TEXT
 );
 
+SET max_parallel_workers_per_gather = 0;
+SELECT * FROM online_retail WHERE CustomerID = 14911;
+
 \copy online_retail FROM '/tmp/Online_Retail.csv' WITH (FORMAT csv, HEADER true);
 
 # In a NEW terminal (client):
 /usr/local/pgsql/bin/psql -d postgres -f /tmp/queries.sql
+
+# at the start of the session, for phase 1 
+SET max_parallel_workers_per_gather = 0;
+SET enable_indexscan = off;
+SET enable_bitmapscan = off;
 
