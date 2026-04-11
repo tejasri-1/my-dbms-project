@@ -62,7 +62,80 @@ SELECT * FROM online_retail WHERE CustomerID = 14911;
 /usr/local/pgsql/bin/psql -d postgres -f /tmp/queries.sql
 
 # at the start of the session, for phase 1 
-SET max_parallel_workers_per_gather = 0;
-SET enable_indexscan = off;
-SET enable_bitmapscan = off;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

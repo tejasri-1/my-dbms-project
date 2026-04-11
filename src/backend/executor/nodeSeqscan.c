@@ -133,48 +133,6 @@ ExecSeqScan(PlanState *pstate)
 	SeqScanState *node = castNode(SeqScanState, pstate);
 		elog(LOG, "DEBUG: ExecSeqScan called");
 
-	//     // --- AUTO INDEXER: Phase 1 Detection --- 
-
-    // Oid relid = node->ss.ss_currentRelation->rd_id;
-
-    // List *qual = node->ss.ps.plan->qual;
-
-    // if (qual != NULL)
-    // {
-    //     ListCell *lc;
-
-    //     foreach(lc, qual)
-    //     {
-    //         Expr *expr = (Expr *) lfirst(lc);
-
-    //         if (IsA(expr, OpExpr))
-    //         {
-    //             OpExpr *op = (OpExpr *) expr;
-
-    //             // Check for binary operator (e.g., col = value)
-    //             if (list_length(op->args) == 2)
-    //             {
-    //                 Node *left = linitial(op->args);
-    //                 Node *right = lsecond(op->args);
-
-    //                 // Check if left side is a column (Var)
-    //                 if (IsA(left, Var))
-    //                 {
-    //                     Var *var = (Var *) left;
-
-    //                     // TEMP: assume '=' operator (we refine later)
-    //                     elog(LOG,
-    //                          "AUTO-INDEXER: Detected predicate on table OID %u, column attno %d",
-    //                          relid,
-    //                          var->varattno);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-
-	// // --- END AUTO INDEXER: Phase 1 Detection ---
-
 	Assert(pstate->state->es_epq_active == NULL);
 	Assert(pstate->qual == NULL);
 	Assert(pstate->ps_ProjInfo == NULL);
@@ -349,29 +307,73 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 
 	/* --- BEGIN PHASE 1: THE OBSERVER --- */
 
-	// Check if there are any filter conditions (quals)
-	
-/* --- PHASE 1: THE EQUALITY OBSERVER --- */
-/* --- PHASE 1: THE EQUALITY OBSERVER (FINAL VERSION) --- */
-
 ExprState *qualstate = scanstate->ss.ps.qual;
 elog(LOG,"DEBUG : ExecInitSeqScan called");
-elog(LOG, "DEBUG: Checking for equality conditions in SeqScan qual");
+//elog(LOG, "DEBUG: Checking for equality conditions in SeqScan qual");
 
 if (qualstate != NULL)
 {
-    //Expr *expr = qualstate->expr;
 
 	Node *expr = (Node *) qualstate->expr;
 
-// elog(LOG, "DEBUG: Raw expr node type: %d", nodeTag(expr));
+
+	//elog(LOG, "DEBUG: nodeTag(expr) = %d", nodeTag(expr));
+   // elog(LOG, "DEBUG: expr nodeToString = %s", nodeToString(expr));
+
+	/* 🔥 NEW: Handle flattened AND (List form) */
+if (expr && IsA(expr, List))
+{
+   // elog(LOG, "DEBUG: Expr is a LIST (flattened AND)");
+
+    ListCell *lc;
+
+    foreach(lc, (List *)expr)
+    {
+        Node *clause = (Node *) lfirst(lc);
+
+        /* unwrap RestrictInfo */
+        while (clause && IsA(clause, RestrictInfo))
+        {
+            clause = (Node *) ((RestrictInfo *)clause)->clause;
+        }
+
+       // elog(LOG, "DEBUG: Clause from LIST: %s", nodeToString(clause));
+
+        if (IsA(clause, OpExpr))
+        {
+            OpExpr *op = (OpExpr *) clause;
+            char *opname = get_opname(op->opno);
+
+            if (opname && strcmp(opname, "=") == 0)
+            {
+                Node *left = linitial(op->args);
+
+                if (IsA(left, Var))
+                {
+                    Var *var = (Var *) left;
+
+                    AutoIndex_Update(
+                        RelationGetRelid(scanstate->ss.ss_currentRelation),
+                        var->varattno
+                    );
+
+                    elog(LOG, "[AUTO-INDEXER] Equality detected (LIST case)");
+                }
+            }
+        }
+    }
+
+    /* 🔥 VERY IMPORTANT: stop further processing */
+    return scanstate;
+}
+/*
 // elog(LOG, "DEBUG: Raw expr string: %s", nodeToString(expr));
     /* 🔥 ADD THIS BLOCK RIGHT HERE */
-	while (expr && IsA(expr, List))
-	{
-	//  elog(LOG, "DEBUG: Expr is a List, unwrapping one level");
-		expr = (Node *) linitial((List *)expr);
-	}
+	// while (expr && IsA(expr, List))
+	// {
+	// //  elog(LOG, "DEBUG: Expr is a List, unwrapping one level");
+	// 	expr = (Node *) linitial((List *)expr);
+	// }
 	/* unwrap RestrictInfo if present */
 	if (expr && IsA(expr, RestrictInfo))
 	{
@@ -382,110 +384,117 @@ if (qualstate != NULL)
 // elog(LOG, "DEBUG: After unwrap node type: %d", nodeTag(expr));
 // elog(LOG, "DEBUG: After unwrap string: %s", nodeToString(expr));
     /* Handle simple AND conditions (most common case) */
-    if (IsA(expr, BoolExpr))
-    {
 
-        BoolExpr *b = (BoolExpr *) expr;
-		//elog(LOG, "DEBUG: Qual is a BoolExpr, checking for AND conditions");
 
-        if (b->boolop == AND_EXPR)
-        {
+    // if (IsA(expr, BoolExpr))
+    // {
+
+    //     BoolExpr *b = (BoolExpr *) expr;
+	// 	//elog(LOG, "DEBUG: Qual is a BoolExpr, checking for AND conditions");
+
+    //     if (b->boolop == AND_EXPR || b->boolop == OR_EXPR)
+    //     {
 			
-            ListCell *lc;
-			//elog(LOG, "DEBUG: BoolExpr is an AND_EXPR, iterating through arguments");
-            foreach(lc, b->args)
-            {
-                Node *clause = (Node *) lfirst(lc);
+    //         ListCell *lc;
+	// 		//elog(LOG, "DEBUG: BoolExpr is an AND_EXPR, iterating through arguments");
+    //         foreach(lc, b->args)
+    //         {
+	// 			elog(LOG, "DEBUG: Raw clause: %s", nodeToString((Node *) lfirst(lc)));
+    //             Node *clause = (Node *) lfirst(lc);
 
-                if (IsA(clause, OpExpr))
-                {
-                    OpExpr *op = (OpExpr *) clause;
+	// 		    while (clause && IsA(clause, RestrictInfo)) {
+	// 				clause = (Node *) ((RestrictInfo *)clause)->clause;
+	// 			}
 
-                    char *opname = get_opname(op->opno);
+	// 			elog(LOG, "DEBUG: After unwrap: %s", nodeToString(clause));
+	// 			elog(LOG, "DEBUG: Node type after unwrap: %d", nodeTag(clause));
 
-                    if (opname && strcmp(opname, "=") == 0)
-                    {
-						Node *left = linitial(op->args);   // <-- YOU DECLARE IT HERE
+    //             if (IsA(clause, OpExpr))
+    //             {
+    //                 OpExpr *op = (OpExpr *) clause;
 
-						if (IsA(left, Var))
-						{
-							Var *var = (Var *) left;
+    //                 char *opname = get_opname(op->opno);
 
-							AutoIndex_Update(
-								RelationGetRelid(scanstate->ss.ss_currentRelation),
-								var->varattno
-							);
+    //                 if (opname && strcmp(opname, "=") == 0)
+    //                 {
+	// 					Node *left = linitial(op->args);   // <-- YOU DECLARE IT HERE
 
-							elog(LOG, "[AUTO-INDEXER] Equality detected");
-						}
-					
-					// elog(LOG, "DEBUG: Found an equality operator in qual");
-                    //     Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
-                    //     char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
-                    //     double cost = node->scan.plan.total_cost;
+	// 					if (IsA(left, Var))
+	// 					{
+	// 						Var *var = (Var *) left;
 
-                    //    // elog(LOG, "============================================");
-                    //     elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
-                    //     // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
-                    //     // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
-                    //     //elog(LOG, "============================================");
-                    }
-					else {
-						elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");
-					}
-					break;
-                }
-				else {
-					elog(LOG, "DEBUG: Clause is not an OpExpr, found clause of type: %s", nodeToString(clause));
-				}
-            }
-        }
-		else {
-			elog(LOG, "DEBUG: BoolExpr is not an AND_EXPR, found boolop type: %d", b->boolop);
-		}
-    }
+	// 						AutoIndex_Update(
+	// 							RelationGetRelid(scanstate->ss.ss_currentRelation),
+	// 							var->varattno
+	// 						);
 
-    /* Handle single condition: WHERE col = value */
-    else if (IsA(expr, OpExpr))
-    {
-        OpExpr *op = (OpExpr *) expr;
+	// 						elog(LOG, "[AUTO-INDEXER] Equality detected");
+	// 					}
 
-        char *opname = get_opname(op->opno);
-		elog(LOG, "DEBUG: Qual is an OpExpr, checking operator type");
-        if (opname && strcmp(opname, "=") == 0)
-        {
+    //                 //    // elog(LOG, "============================================");
+    //                 //     elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
+    //                 //     // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
+    //                 //     // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
+    //                 //     //elog(LOG, "============================================");
+    //                 }
+	// 				else {
+	// 					elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");
+	// 				}
+	// 				// break;
+    //             }
+	// 			else {
+	// 				elog(LOG, "DEBUG: Clause is not an OpExpr, found clause of type: %s", nodeToString(clause));
+	// 			}
+    //         }
+    //     }
+	// 	else {
+	// 		elog(LOG, "DEBUG: BoolExpr is not an AND_EXPR, found boolop type: %d", b->boolop);
+	// 	}
+    // }
 
-            Node *left = linitial(op->args);
+    // /* Handle single condition: WHERE col = value */
+    // else if (IsA(expr, OpExpr))
+    // {
+    //     OpExpr *op = (OpExpr *) expr;
 
-            if (IsA(left, Var))
-            {
-                Var *var = (Var *) left;
+    //     char *opname = get_opname(op->opno);
+	// 	elog(LOG, "DEBUG: Qual is an OpExpr, checking operator type");
+    //     if (opname && strcmp(opname, "=") == 0)
+    //     {
 
-                AutoIndex_Update(
-                    RelationGetRelid(scanstate->ss.ss_currentRelation),
-                    var->varattno
-                );
+    //         Node *left = linitial(op->args);
 
-                elog(LOG, "[AUTO-INDEXER] Equality detected");
-            }
+    //         if (IsA(left, Var))
+    //         {
+    //             Var *var = (Var *) left;
 
-            // Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
-            // char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
-            // double cost = node->scan.plan.total_cost;
+    //             AutoIndex_Update(
+    //                 RelationGetRelid(scanstate->ss.ss_currentRelation),
+    //                 var->varattno
+    //             );
 
-            // elog(LOG, "============================================");
-            // elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
-            // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
-            // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
-            // elog(LOG, "============================================");
-        }
-		else {
-			elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");
-		}
-    }
-	else{
-		elog(LOG, "DEBUG: Qual is neither a BoolExpr nor an OpExpr, found qual of type: %s", nodeToString(expr));
-	}
+    //             elog(LOG, "[AUTO-INDEXER] Equality detected");
+    //         }
+
+    //         // Oid relid = RelationGetRelid(scanstate->ss.ss_currentRelation);
+    //         // char *relname = RelationGetRelationName(scanstate->ss.ss_currentRelation);
+    //         // double cost = node->scan.plan.total_cost;
+
+    //         // elog(LOG, "============================================");
+    //         // elog(LOG, "[AUTO-INDEXER] !!! EQUALITY DETECTED !!!");
+    //         // elog(LOG, "[AUTO-INDEXER] Table: %s (OID: %u)", relname, relid);
+    //         // elog(LOG, "[AUTO-INDEXER] Estimated Cost: %.2f", cost);
+    //         // elog(LOG, "============================================");
+    //     }
+	// 	else {
+	// 		elog(LOG, "DEBUG: Operator is not equality, found operator: %s", opname ? opname : "unknown");
+	// 	}
+    // }
+	
+	// else{
+	// 	elog(LOG, "DEBUG: Qual is neither a BoolExpr nor an OpExpr, found qual of type: %s", nodeToString(expr));
+	// }
+
 }
 else {
 	elog(LOG, "DEBUG: No qual conditions found in SeqScan");
