@@ -306,39 +306,40 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 
 
 	/* --- BEGIN PHASE 1: THE OBSERVER --- */
-
+//1.accessing where clause expression
 ExprState *qualstate = scanstate->ss.ps.qual;
 elog(LOG,"DEBUG : ExecInitSeqScan called");
 //elog(LOG, "DEBUG: Checking for equality conditions in SeqScan qual");
 
 if (qualstate != NULL)
 {
-
+//2.extract the expression tree from the qualstate
 	Node *expr = (Node *) qualstate->expr;
 
 
 	//elog(LOG, "DEBUG: nodeTag(expr) = %d", nodeTag(expr));
    // elog(LOG, "DEBUG: expr nodeToString = %s", nodeToString(expr));
 
-	/* 🔥 NEW: Handle flattened AND (List form) */
+/* 3. Handle flattened AND (List form) */
 if (expr && IsA(expr, List))
 {
    // elog(LOG, "DEBUG: Expr is a LIST (flattened AND)");
 
     ListCell *lc;
-
+//4.iterate through the list of expressions in the AND clause
     foreach(lc, (List *)expr)
     {
         Node *clause = (Node *) lfirst(lc);
 
-        /* unwrap RestrictInfo */
+        /* unwrap RestrictInfo *///
+		//5. If the clause is a RestrictInfo, extract the actual expression from it
         while (clause && IsA(clause, RestrictInfo))
         {
             clause = (Node *) ((RestrictInfo *)clause)->clause;
         }
 
        // elog(LOG, "DEBUG: Clause from LIST: %s", nodeToString(clause));
-
+		//6. Check if the clause is an OpExpr representing an equality condition
         if (IsA(clause, OpExpr))
         {
             OpExpr *op = (OpExpr *) clause;
@@ -346,6 +347,7 @@ if (expr && IsA(expr, List))
 
             if (opname && strcmp(opname, "=") == 0)
             {
+				//7.extrac the column being compared for equality and update the auto-indexing stats
                 Node *left = linitial(op->args);
 
                 if (IsA(left, Var))
