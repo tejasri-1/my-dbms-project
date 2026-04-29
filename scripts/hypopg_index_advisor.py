@@ -868,6 +868,15 @@ def build_column_stats(args, columns, row_count, log):
         item["access_fraction"] = (
             item["access_count"] / total_accesses if total_accesses > 0 else 0.0
         )
+        item["insert_fraction"] = (
+            item["insert_count"] / total_accesses if total_accesses > 0 else 0.0
+        )
+        item["update_fraction"] = (
+            item["update_count"] / total_accesses if total_accesses > 0 else 0.0
+        )
+        item["delete_fraction"] = (
+            item["delete_count"] / total_accesses if total_accesses > 0 else 0.0
+        )
     return stats, total_accesses
 
 
@@ -885,13 +894,22 @@ def choose_candidate_columns(args, columns, column_stats, total_accesses, existi
         if stat is None:
             log.write(f"CANDIDATE_SKIP column={column} reason=no_stats\n")
             continue
-        if key in existing_indexes:
-            log.write(f"CANDIDATE_SKIP column={column} reason=real_index_already_exists\n")
-            continue
-        if total_accesses <= 0 or stat["access_fraction"] <= access_threshold:
+        activity_count = (
+            stat["access_count"]
+            + stat["update_count"]
+            + stat["insert_count"]
+            + stat["delete_count"]
+        )
+        activity_fraction = (
+            stat["access_fraction"]
+            + stat["update_fraction"]
+            + stat["insert_fraction"]
+            + stat["delete_fraction"]
+        )
+        if total_accesses <= 0 or activity_fraction <= access_threshold:
             log.write(
                 f"CANDIDATE_SKIP column={column} reason=access_fraction "
-                f"access_count={stat['access_count']} access_fraction={stat.get('access_fraction', 0):.4f} "
+                f"all_count={activity_count} all_fraction={activity_fraction:.4f} "
                 f"threshold={access_threshold:.4f}\n"
             )
             continue
@@ -903,6 +921,7 @@ def choose_candidate_columns(args, columns, column_stats, total_accesses, existi
             continue
         log.write(
             f"CANDIDATE_KEEP column={column} access_count={stat['access_count']} "
+            f"real_index_exists={key in existing_indexes} "
             f"access_fraction={stat['access_fraction']:.4f} n_distinct={stat['n_distinct']} "
             f"distinct_ratio={stat['distinct_ratio']:.4f} source={stat['source']} "
             f"most_common_vals={stat['most_common_vals']} most_common_freqs={stat['most_common_freqs']}\n"
@@ -943,9 +962,9 @@ def run_online_advisor(args):
         log.write("  total_count means total predicate-column accesses processed for this table so far\n")
         log.write("  per query: total_count += number of predicate columns referenced by that query\n")
         log.write("  access_count is read only from the PostgreSQL-collected stats table, never precomputed from queries.sql before execution\n")
-        log.write("  eligible_column = access_count / total_count > max(0.05, 2/total_columns) AND distinct_count / row_count > 0.00\n")
+        log.write("  eligible_column = access_count+update_count+insert_count+delete_count / total_count > max(0.05, 2/total_columns) AND distinct_count / row_count > 0.00\n")
         log.write("  candidate selection does not require the column to appear in the current query\n")
-        log.write("  skip HypoPG if a real single-column index already exists on that column; evaluate remaining columns\n")
+        log.write("  candidate selection includes columns that already have real indexes\n")
         log.write("  explain_baseline_scan_cost = EXPLAIN cost with no hypothetical index, logged for comparison\n")
         log.write("  hypo_scan_cost = EXPLAIN cost after hypopg_reset() + hypopg_create_index(candidate), logged for comparison\n")
         log.write("  baseline_cost = relpages*seq_page_cost + rows*cpu_tuple_cost\n")
@@ -961,7 +980,9 @@ def run_online_advisor(args):
         log.write("  UPDATE increments access_count for predicate columns and update_count for modified columns by EXPLAIN-estimated rows\n")
         log.write("  DELETE increments access_count for predicate columns and delete_count for all columns by EXPLAIN-estimated rows\n")
         log.write(f"  ANALYZE runs every {args.analyze_every_writes} write query/queries\n")
-        log.write("  create real index when expected_with_index < expected_without_index\n\n")
+        log.write("  choose least expected_with_index among candidates, then compare with expected_without_index\n")
+        log.write("  if best with-index cost wins: use existing index if present, otherwise create it\n")
+        log.write("  if without-index cost wins: curr_index_pointer=no_index\n\n")
         log.write(f"table={args.table} rows={row_count} columns={columns}\n")
         log.write(f"catalog_stats relpages={catalog_stats['relpages']} reltuples={catalog_stats['reltuples']}\n")
         log.write(f"planner_cost_settings={cost_settings}\n")
@@ -1001,7 +1022,11 @@ def run_online_advisor(args):
                         f"insert_count={stat.get('insert_count', 0)} "
                         f"update_count={stat.get('update_count', 0)} "
                         f"delete_count={stat.get('delete_count', 0)} "
-                        f"access_fraction={stat['access_fraction']:.4f} n_distinct={stat['n_distinct']} "
+                        f"access_fraction={stat['access_fraction']:.4f} "
+                        f"insert_fraction={stat['insert_fraction']:.4f} "
+                        f"update_fraction={stat['update_fraction']:.4f} "
+                        f"delete_fraction={stat['delete_fraction']:.4f} "
+                        f"n_distinct={stat['n_distinct']} "
                         f"distinct_count={stat['distinct_count']:.2f} distinct_ratio={stat['distinct_ratio']:.4f} "
                         f"source={stat['source']} most_common_vals={stat['most_common_vals']} "
                         f"most_common_freqs={stat['most_common_freqs']}\n"
@@ -1045,6 +1070,7 @@ def run_online_advisor(args):
             best = None
             for column in candidate_columns:
                 stat = column_stats[column.lower()]
+                real_index_exists = column.lower() in existing_indexes
                 access_count = max(int(stat["access_count"]), 1)
                 create_cost = estimate_btree_create_cost(
                     row_count,
@@ -1076,6 +1102,7 @@ def run_online_advisor(args):
                     "query_number": query_number,
                     "query": query,
                     "column": column,
+                    "real_index_exists": real_index_exists,
                     "access_count": access_count,
                     "access_fraction": stat["access_fraction"],
                     "distinct_ratio": stat["distinct_ratio"],
@@ -1103,6 +1130,7 @@ def run_online_advisor(args):
                 jsonl.write(json.dumps(record, sort_keys=True) + "\n")
                 log.write(
                     f"HYPOPG_RESULT column={column} hypopg_index={hypo['hypopg_indexname']} "
+                    f"real_index_exists={real_index_exists} "
                     f"explain_baseline_scan_cost={explain_baseline_cost:.2f} "
                     f"formula_baseline_cost={baseline_cost:.2f} hypo_scan_cost={hypo_cost:.2f} "
                     f"create_cost={create_cost:.2f} expected_without_index={expected_without:.2f} "
@@ -1114,6 +1142,7 @@ def run_online_advisor(args):
                 )
                 log.write(
                     f"QUERY_COST_SUMMARY query_number={query_number} column={column} "
+                    f"real_index_exists={real_index_exists} "
                     f"access_count={access_count} "
                     f"read_cost_without_index={read_cost_without_index:.2f} "
                     f"estimated_without_index_cost={expected_without:.2f} "
@@ -1122,23 +1151,83 @@ def run_online_advisor(args):
                     f"write_cost={write_cost:.2f} "
                     f"estimated_with_index_cost={expected_with:.2f}\n"
                 )
-                if improves_expected:
-                    if best is None or expected_with < best["expected_with_index"]:
-                        best = record
+                if best is None or expected_with < best["expected_with_index"]:
+                    best = record
 
             run_psql(args, "SELECT hypopg_reset();")
 
             created_index = None
-            if best is not None:
-                created_index, real_index_sql = create_real_index(args, [best["column"]])
-                created_indexes.append(created_index)
-                run_psql(args, f"ANALYZE {qualified_table(args.table)};")
+            query_index_decision = "use_no_index"
+            curr_index_pointer = "no_index"
+            if best is None:
+                query_index_decision = "use_no_index"
                 log.write(
-                    f"CREATE_INDEX_DECISION decision=create column={best['column']} "
-                    f"index={created_index} sql={real_index_sql}\n"
+                    "QUERY_INDEX_DECISION "
+                    f"query_number={query_number} decision=use_no_index "
+                    f"curr_index_pointer={curr_index_pointer} "
+                    "reason=no_candidate "
+                    "without_index_cost=not_applicable_no_candidate "
+                    "best_with_index_cost=not_applicable_no_candidate "
+                    "best_create_cost=not_applicable_no_candidate "
+                    "best_read_cost=not_applicable_no_candidate "
+                    "best_write_cost=not_applicable_no_candidate\n"
                 )
+                log.write("CREATE_INDEX_DECISION decision=do_not_create reason=no_candidate\n")
+            elif best["expected_with_index"] < best["expected_without_index"]:
+                curr_index_pointer = best["column"]
+                best_read_cost = best["hypo_scan_cost"] * best["access_count"]
+                best_write_cost = best["write_maint_cost"]
+                if best["real_index_exists"]:
+                    query_index_decision = "use_existing_index"
+                    log.write(
+                        "QUERY_INDEX_DECISION "
+                        f"query_number={query_number} decision=use_existing_index "
+                        f"curr_index_pointer={curr_index_pointer} "
+                        f"without_index_cost={best['expected_without_index']:.2f} "
+                        f"best_with_index_cost={best['expected_with_index']:.2f} "
+                        f"best_create_cost={best['estimated_create_index_cost']:.2f} "
+                        f"best_read_cost={best_read_cost:.2f} "
+                        f"best_write_cost={best_write_cost:.2f}\n"
+                    )
+                    log.write(
+                        f"CREATE_INDEX_DECISION decision=use_existing column={best['column']} "
+                        f"reason=real_index_already_exists\n"
+                    )
+                else:
+                    query_index_decision = "create_and_use_index"
+                    log.write(
+                        "QUERY_INDEX_DECISION "
+                        f"query_number={query_number} decision=create_and_use_index "
+                        f"curr_index_pointer={curr_index_pointer} "
+                        f"without_index_cost={best['expected_without_index']:.2f} "
+                        f"best_with_index_cost={best['expected_with_index']:.2f} "
+                        f"best_create_cost={best['estimated_create_index_cost']:.2f} "
+                        f"best_read_cost={best_read_cost:.2f} "
+                        f"best_write_cost={best_write_cost:.2f}\n"
+                    )
+                    created_index, real_index_sql = create_real_index(args, [best["column"]])
+                    created_indexes.append(created_index)
+                    run_psql(args, f"ANALYZE {qualified_table(args.table)};")
+                    log.write(
+                        f"CREATE_INDEX_DECISION decision=create column={best['column']} "
+                        f"index={created_index} sql={real_index_sql}\n"
+                    )
             else:
-                log.write("CREATE_INDEX_DECISION decision=do_not_create reason=no_candidate_reduced_expected_cost\n")
+                query_index_decision = "use_no_index"
+                curr_index_pointer = "no_index"
+                best_read_cost = best["hypo_scan_cost"] * best["access_count"]
+                best_write_cost = best["write_maint_cost"]
+                log.write(
+                    "QUERY_INDEX_DECISION "
+                    f"query_number={query_number} decision=use_no_index "
+                    f"curr_index_pointer={curr_index_pointer} "
+                    f"without_index_cost={best['expected_without_index']:.2f} "
+                    f"best_with_index_cost={best['expected_with_index']:.2f} "
+                    f"best_create_cost={best['estimated_create_index_cost']:.2f} "
+                    f"best_read_cost={best_read_cost:.2f} "
+                    f"best_write_cost={best_write_cost:.2f}\n"
+                )
+                log.write("CREATE_INDEX_DECISION decision=do_not_create reason=without_index_cost_is_lower\n")
 
             final_plan = explain_plan(args, query)
             log.write(
@@ -1198,6 +1287,8 @@ def run_online_advisor(args):
                         "query_number": query_number,
                         "query": query,
                         "created_index": created_index,
+                        "query_index_decision": query_index_decision,
+                        "curr_index_pointer": curr_index_pointer,
                         "final_plan": final_plan,
                     },
                     sort_keys=True,
