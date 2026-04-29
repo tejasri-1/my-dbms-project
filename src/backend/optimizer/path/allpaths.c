@@ -49,6 +49,7 @@
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
+#include "utils/auto_indexer.h"
 
 
 /* Bitmask flags for pushdown_safety_info.unsafeFlags */
@@ -862,6 +863,14 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 
 	/* Consider index scans */
 	create_index_paths(root, rel);
+
+	/*
+	 * Internal auto-index advisor: after the normal paths are available, compare
+	 * the cheapest real path with a cheap hypothetical btree estimate for
+	 * simple equality predicates.  This only records/enqueues advice; it never
+	 * creates an index in the planning backend.
+	 */
+	AutoIndex_ConsiderRel(root, rel);
 }
 
 /*

@@ -58,14 +58,57 @@ SELECT * FROM online_retail WHERE CustomerID = 14911;
 
 \copy online_retail FROM '/tmp/Online_Retail.csv' WITH (FORMAT csv, HEADER true);
 
+# Optional: test a possible index with HypoPG
+
+CREATE EXTENSION IF NOT EXISTS hypopg;
+
+-- Give the planner table statistics after loading the CSV.
+ANALYZE online_retail;
+
+-- Current plan without any real index.
+EXPLAIN SELECT * FROM online_retail WHERE customerid = 14911;
+
+-- Create a hypothetical index. This does not build a real index on disk.
+SELECT * FROM hypopg_create_index(
+    'CREATE INDEX ON online_retail (customerid)'
+);
+
+-- Check whether PostgreSQL would use that index.
+EXPLAIN SELECT * FROM online_retail WHERE customerid = 14911;
+
+-- Remove all hypothetical indexes in this session.
+SELECT hypopg_reset();
+
+# Exhaustive HypoPG index advisor for all column combinations
+
+Run this after creating `online_retail`, loading the CSV, and installing HypoPG
+in the database.
+
+python3 scripts/hypopg_index_advisor.py \
+    --psql /usr/local/pgsql/bin/psql \
+    --dbname postgres \
+    --table public.online_retail \
+    --queries queries.sql \
+    --log hypopg_advisor.log \
+    --jsonl hypopg_advisor_candidates.jsonl
+
+This will:
+
+1. run `CREATE EXTENSION IF NOT EXISTS hypopg`
+2. run `ANALYZE online_retail`
+3. log the baseline no-index cost for the workload
+4. generate all non-empty btree index column combinations
+5. create one hypothetical index at a time
+6. run `EXPLAIN (FORMAT JSON)` for every query in `queries.sql`
+7. log every candidate index and its total workload cost
+8. choose the minimum-cost option, including the no-index baseline
+9. create the real index only if an index beats the no-index baseline
+10. run `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` for the queries and log timing
+
 # In a NEW terminal (client):
 /usr/local/pgsql/bin/psql -d postgres -f /tmp/queries.sql
 
 # at the start of the session, for phase 1 
-
-
-
-
 
 
 

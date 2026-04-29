@@ -34,18 +34,6 @@
 #include "executor/nodeSeqscan.h"
 #include "utils/rel.h"
 
-//added headers
-#include "utils/elog.h"
-#include "nodes/nodeFuncs.h"
-#include "utils/lsyscache.h"
-#include "catalog/pg_operator.h"
-#include "nodes/pathnodes.h"
-#include "utils/auto_indexer.h"
-
-// #include "nodes/nodeFuncs.h"
-// #include "nodes/pg_list.h"
-// #include "nodes/primnodes.h"
-
 static TupleTableSlot *SeqNext(SeqScanState *node);
 
 /* ----------------------------------------------------------------
@@ -131,7 +119,6 @@ ExecSeqScan(PlanState *pstate)
 {
 
 	SeqScanState *node = castNode(SeqScanState, pstate);
-		elog(LOG, "DEBUG: ExecSeqScan called");
 
 	Assert(pstate->state->es_epq_active == NULL);
 	Assert(pstate->qual == NULL);
@@ -198,7 +185,6 @@ ExecSeqScanWithQualProject(PlanState *pstate)
 {
 	SeqScanState *node = castNode(SeqScanState, pstate);
 
-	elog(LOG, "DEBUG: ExecSeqScanWithQualProject called");
 	Assert(pstate->state->es_epq_active == NULL);
 	pg_assume(pstate->qual != NULL);
 	pg_assume(pstate->ps_ProjInfo != NULL);
@@ -304,75 +290,6 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 			scanstate->ss.ps.ExecProcNode = ExecSeqScanWithQualProject;
 	}
 
-
-	/* --- BEGIN PHASE 1: THE OBSERVER --- */
-//1.accessing where clause expression
-ExprState *qualstate = scanstate->ss.ps.qual;
-elog(LOG,"DEBUG : ExecInitSeqScan called");
-//elog(LOG, "DEBUG: Checking for equality conditions in SeqScan qual");
-
-if (qualstate != NULL)
-{
-//2.extract the expression tree from the qualstate
-	Node *expr = (Node *) qualstate->expr;
-
-
-	//elog(LOG, "DEBUG: nodeTag(expr) = %d", nodeTag(expr));
-   // elog(LOG, "DEBUG: expr nodeToString = %s", nodeToString(expr));
-
-/* 3. Handle flattened AND (List form) */
-if (expr && IsA(expr, List))
-{
-   // elog(LOG, "DEBUG: Expr is a LIST (flattened AND)");
-
-    ListCell *lc;
-//4.iterate through the list of expressions in the AND clause
-    foreach(lc, (List *)expr)
-    {
-        Node *clause = (Node *) lfirst(lc);
-
-        /* unwrap RestrictInfo *///
-		//5. If the clause is a RestrictInfo, extract the actual expression from it
-        while (clause && IsA(clause, RestrictInfo))
-        {
-            clause = (Node *) ((RestrictInfo *)clause)->clause;
-        }
-
-       // elog(LOG, "DEBUG: Clause from LIST: %s", nodeToString(clause));
-		//6. Check if the clause is an OpExpr representing an equality condition
-        if (IsA(clause, OpExpr))
-        {
-            OpExpr *op = (OpExpr *) clause;
-            char *opname = get_opname(op->opno);
-
-            if (opname && strcmp(opname, "=") == 0)
-            {
-				//7.extrac the column being compared for equality and update the auto-indexing stats
-                Node *left = linitial(op->args);
-
-                if (IsA(left, Var))
-                {
-                    Var *var = (Var *) left;
-
-                    AutoIndex_Update(
-                        RelationGetRelid(scanstate->ss.ss_currentRelation),
-                        var->varattno
-                    );
-
-                    elog(LOG, "[AUTO-INDEXER] Equality detected (LIST case)");
-                }
-            }
-        }
-    }
-
-    /* 🔥 VERY IMPORTANT: stop further processing */
-    return scanstate;
-}
-}
-else {
-	elog(LOG, "DEBUG: No qual conditions found in SeqScan");
-}
-//---end of adding
 
 	return scanstate;
 }
