@@ -259,6 +259,38 @@ def estimate_seq_scan_cost(row_count, relpages, cost_settings):
     return pages * seq_page_cost + rows * cpu_tuple_cost
 
 
+def estimate_write_maintenance_cost(stat, row_count, cost_settings):
+    rows = max(float(row_count), 1.0)
+    cpu_tuple_cost = cost_settings.get("cpu_tuple_cost", 0.01)
+    cpu_operator_cost = cost_settings.get("cpu_operator_cost", 0.0025)
+    insert_count = max(float(stat.get("insert_count", 0)), 0.0)
+    update_count = max(float(stat.get("update_count", 0)), 0.0)
+    delete_count = max(float(stat.get("delete_count", 0)), 0.0)
+
+    c_insert = math.log2(max(rows, 2.0)) * cpu_operator_cost + cpu_tuple_cost
+    c_update = 2.0 * c_insert
+    c_delete = c_insert
+    index_maint_cost = (
+        insert_count * c_insert
+        + update_count * c_update
+        + delete_count * c_delete
+    )
+    stats_maint_cost = (
+        insert_count + update_count + delete_count
+    ) * cpu_operator_cost
+    return {
+        "insert_count": insert_count,
+        "update_count": update_count,
+        "delete_count": delete_count,
+        "c_insert": c_insert,
+        "c_update": c_update,
+        "c_delete": c_delete,
+        "write_index_maint_cost": index_maint_cost,
+        "stats_maint_cost": stats_maint_cost,
+        "write_maint_cost": index_maint_cost ,
+    }
+
+
 def parse_pg_array_text(value):
     if not value:
         return []
@@ -439,6 +471,69 @@ def extract_query_columns(query, columns):
     return result
 
 
+def classify_query(query):
+    match = re.match(r"\s*([a-zA-Z]+)", query)
+    return match.group(1).upper() if match else "UNKNOWN"
+
+
+def extract_update_set_columns(query, columns):
+    match = re.search(r"\bset\b(.*?)\bwhere\b", query, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        match = re.search(r"\bset\b(.*?)(?:\breturning\b|;|$)", query, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return set()
+    set_clause = match.group(1)
+    result = set()
+    for lower_name, original_name in normalize_column_map(columns).items():
+        pattern = r"(?<![a-zA-Z0-9_\.])" + re.escape(lower_name) + r"(?![a-zA-Z0-9_])\s*="
+        if re.search(pattern, set_clause, flags=re.IGNORECASE):
+            result.add(original_name)
+    return result
+
+
+def count_insert_values_rows(query):
+    values_match = re.search(r"\bvalues\b", query, flags=re.IGNORECASE)
+    if not values_match:
+        return None
+    text = query[values_match.end():]
+    depth = 0
+    count = 0
+    in_quote = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if in_quote:
+            if char == "'" and i + 1 < len(text) and text[i + 1] == "'":
+                i += 2
+                continue
+            if char == "'":
+                in_quote = False
+        else:
+            if char == "'":
+                in_quote = True
+            elif char == "(":
+                if depth == 0:
+                    count += 1
+                depth += 1
+            elif char == ")" and depth > 0:
+                depth -= 1
+        i += 1
+    return count if count > 0 else None
+
+
+def estimate_statement_rows(args, query, query_kind):
+    if query_kind == "INSERT":
+        values_count = count_insert_values_rows(query)
+        if values_count is not None:
+            return float(values_count), "values_row_count"
+    try:
+        plan = explain_plan(args, query)
+    except Exception:
+        return 1.0, "fallback_one"
+    rows = max((node.get("plan_rows") or 0 for node in plan["plan_nodes"]), default=0)
+    return max(float(rows), 1.0), "explain_plan_rows"
+
+
 def pg_stats_distinct_count(n_distinct, row_count):
     value = float(n_distinct)
     if value < 0:
@@ -471,6 +566,9 @@ def get_pg_column_stats(args, columns, row_count):
             "column_name": column,
             "access_count": 0,
             "total_count": 0,
+            "insert_count": 0,
+            "update_count": 0,
+            "delete_count": 0,
             "n_distinct": float(n_distinct),
             "distinct_count": distinct_count,
             "distinct_ratio": distinct_count / max(row_count, 1),
@@ -513,6 +611,9 @@ def ensure_stats_table(args):
             {quote_ident(args.stats_column_col)} text NOT NULL,
             {quote_ident(args.stats_access_col)} bigint NOT NULL DEFAULT 0,
             {quote_ident(args.stats_total_col)} bigint NOT NULL DEFAULT 0,
+            insert_count bigint NOT NULL DEFAULT 0,
+            update_count bigint NOT NULL DEFAULT 0,
+            delete_count bigint NOT NULL DEFAULT 0,
             {quote_ident(args.stats_ndistinct_col)} float8 NOT NULL DEFAULT 0,
             most_common_vals text,
             most_common_freqs text,
@@ -530,6 +631,9 @@ def ensure_stats_table(args):
         args.stats_access_col: "bigint NOT NULL DEFAULT 0",
         args.stats_ndistinct_col: "float8 NOT NULL DEFAULT 0",
         args.stats_total_col: "bigint NOT NULL DEFAULT 0",
+        "insert_count": "bigint NOT NULL DEFAULT 0",
+        "update_count": "bigint NOT NULL DEFAULT 0",
+        "delete_count": "bigint NOT NULL DEFAULT 0",
         "most_common_vals": "text",
         "most_common_freqs": "text",
         "updated_at": "timestamptz NOT NULL DEFAULT now()",
@@ -554,6 +658,9 @@ def reset_stats_table(args, log):
         UPDATE {args.stats_table}
         SET {quote_ident(args.stats_access_col)} = 0,
             {quote_ident(args.stats_total_col)} = 0,
+            insert_count = 0,
+            update_count = 0,
+            delete_count = 0,
             updated_at = now()
         WHERE lower(table_schema) = lower({quote_literal(schema)})
           AND lower(table_name) = lower({quote_literal(table)});
@@ -561,7 +668,7 @@ def reset_stats_table(args, log):
     )
     log.write(
         f"STATS_RESET table={args.stats_table} target={schema}.{table} "
-        f"access_count=0 total_count=0\n"
+        f"access_count=0 total_count=0 insert_count=0 update_count=0 delete_count=0\n"
     )
 
 
@@ -605,10 +712,16 @@ def load_stats_table(args, columns, row_count, log):
         if args.stats_total_col.lower() in available
         else "'0'"
     )
+    insert_expr = "insert_count::bigint::text" if "insert_count" in available else "'0'"
+    update_expr = "update_count::bigint::text" if "update_count" in available else "'0'"
+    delete_expr = "delete_count::bigint::text" if "delete_count" in available else "'0'"
     sql = f"""
         SELECT lower({quote_ident(args.stats_column_col)}::text) || '|' ||
                {quote_ident(args.stats_access_col)}::bigint::text || '|' ||
                {total_expr} || '|' ||
+               {insert_expr} || '|' ||
+               {update_expr} || '|' ||
+               {delete_expr} || '|' ||
                {quote_ident(args.stats_ndistinct_col)}::float8::text || '|' ||
                {vals_expr} || '|' ||
                {freqs_expr}
@@ -619,10 +732,20 @@ def load_stats_table(args, columns, row_count, log):
     table_stats = {}
     valid_columns = normalize_column_map(columns)
     for line in output.splitlines():
-        parts = line.split("|", 5)
-        if len(parts) != 6:
+        parts = line.split("|", 8)
+        if len(parts) != 9:
             continue
-        column, access_count, total_count, n_distinct, most_common_vals, most_common_freqs = parts
+        (
+            column,
+            access_count,
+            total_count,
+            insert_count,
+            update_count,
+            delete_count,
+            n_distinct,
+            most_common_vals,
+            most_common_freqs,
+        ) = parts
         if column not in valid_columns:
             log.write(f"STATS_TABLE skip_unknown_column column={column}\n")
             continue
@@ -631,6 +754,9 @@ def load_stats_table(args, columns, row_count, log):
             "column_name": valid_columns[column],
             "access_count": int(access_count),
             "total_count": int(total_count),
+            "insert_count": int(insert_count),
+            "update_count": int(update_count),
+            "delete_count": int(delete_count),
             "n_distinct": float(n_distinct),
             "distinct_count": distinct_count,
             "distinct_ratio": distinct_count / max(row_count, 1),
@@ -642,7 +768,16 @@ def load_stats_table(args, columns, row_count, log):
     return table_stats
 
 
-def upsert_column_stats(args, columns, referenced_columns, row_count, log):
+def upsert_column_stats(
+    args,
+    columns,
+    referenced_columns,
+    modified_columns,
+    query_kind,
+    affected_rows,
+    row_count,
+    log,
+):
     if not args.stats_table:
         log.write("STATS_UPDATE skipped reason=no_stats_table_configured\n")
         return
@@ -650,12 +785,17 @@ def upsert_column_stats(args, columns, referenced_columns, row_count, log):
     schema, table = split_table_name(args.table)
     pg_stats = get_pg_column_stats(args, columns, row_count)
     referenced = {column.lower() for column in referenced_columns}
+    modified = {column.lower() for column in modified_columns}
     total_increment = len(referenced)
+    affected = max(int(math.ceil(float(affected_rows))), 0)
 
     for column in columns:
         key = column.lower()
         stat = pg_stats.get(key, {})
         access_increment = 1 if key in referenced else 0
+        insert_increment = affected if query_kind == "INSERT" else 0
+        update_increment = affected if query_kind == "UPDATE" and key in modified else 0
+        delete_increment = affected if query_kind == "DELETE" else 0
         n_distinct = float(stat.get("n_distinct", 0.0))
         most_common_vals = stat.get("most_common_vals", "")
         most_common_freqs = stat.get("most_common_freqs", "")
@@ -663,6 +803,9 @@ def upsert_column_stats(args, columns, referenced_columns, row_count, log):
             UPDATE {args.stats_table}
             SET {quote_ident(args.stats_access_col)} = {quote_ident(args.stats_access_col)} + {access_increment},
                 {quote_ident(args.stats_total_col)} = {quote_ident(args.stats_total_col)} + {total_increment},
+                insert_count = insert_count + {insert_increment},
+                update_count = update_count + {update_increment},
+                delete_count = delete_count + {delete_increment},
                 {quote_ident(args.stats_ndistinct_col)} = {n_distinct},
                 most_common_vals = {quote_literal(str(most_common_vals))},
                 most_common_freqs = {quote_literal(str(most_common_freqs))},
@@ -677,6 +820,9 @@ def upsert_column_stats(args, columns, referenced_columns, row_count, log):
                 {quote_ident(args.stats_column_col)},
                 {quote_ident(args.stats_access_col)},
                 {quote_ident(args.stats_total_col)},
+                insert_count,
+                update_count,
+                delete_count,
                 {quote_ident(args.stats_ndistinct_col)},
                 most_common_vals,
                 most_common_freqs,
@@ -688,6 +834,9 @@ def upsert_column_stats(args, columns, referenced_columns, row_count, log):
                 {quote_literal(column)},
                 {access_increment},
                 {total_increment},
+                {insert_increment},
+                {update_increment},
+                {delete_increment},
                 {n_distinct},
                 {quote_literal(str(most_common_vals))},
                 {quote_literal(str(most_common_freqs))},
@@ -704,7 +853,8 @@ def upsert_column_stats(args, columns, referenced_columns, row_count, log):
 
     log.write(
         f"STATS_UPDATE table={args.stats_table} total_count_increment={total_increment} "
-        f"referenced_columns={sorted(referenced)}\n"
+        f"query_kind={query_kind} affected_rows={affected:.2f} "
+        f"referenced_columns={sorted(referenced)} modified_columns={sorted(modified)}\n"
     )
 
 
@@ -801,7 +951,16 @@ def run_online_advisor(args):
         log.write("  baseline_cost = relpages*seq_page_cost + rows*cpu_tuple_cost\n")
         log.write("  create_cost = relpages*seq_page_cost + rows*cpu_tuple_cost + rows*index_columns*cpu_operator_cost + rows*log2(rows)*cpu_operator_cost\n")
         log.write("  expected_without_index = access_count * baseline_cost\n")
-        log.write("  expected_with_index = create_cost + access_count * hypo_scan_cost\n")
+        log.write("  write_index_maint_cost = insert_count*C_insert + update_count*C_update + delete_count*C_delete\n")
+        log.write("  C_insert = log2(rows)*cpu_operator_cost + cpu_tuple_cost\n")
+        log.write("  C_update = 2*C_insert, C_delete = C_insert\n")
+        log.write("  stats_maint_cost = (insert_count + update_count + delete_count) * cpu_operator_cost\n")
+        log.write("  write_maint_cost = write_index_maint_cost + stats_maint_cost\n")
+        log.write("  expected_with_index = create_cost + access_count * hypo_scan_cost + write_maint_cost\n")
+        log.write("  INSERT increments insert_count for all columns by estimated inserted rows\n")
+        log.write("  UPDATE increments access_count for predicate columns and update_count for modified columns by EXPLAIN-estimated rows\n")
+        log.write("  DELETE increments access_count for predicate columns and delete_count for all columns by EXPLAIN-estimated rows\n")
+        log.write(f"  ANALYZE runs every {args.analyze_every_writes} write query/queries\n")
         log.write("  create real index when expected_with_index < expected_without_index\n\n")
         log.write(f"table={args.table} rows={row_count} columns={columns}\n")
         log.write(f"catalog_stats relpages={catalog_stats['relpages']} reltuples={catalog_stats['reltuples']}\n")
@@ -815,9 +974,20 @@ def run_online_advisor(args):
         log.write(f"queries={len(queries)}\n\n")
 
         created_indexes = []
+        writes_since_analyze = 0
         for query_number, query in enumerate(queries, start=1):
+            query_kind = classify_query(query)
+            referenced_columns = extract_query_columns(query, columns)
+            modified_columns = extract_update_set_columns(query, columns) if query_kind == "UPDATE" else set()
+            affected_rows, affected_rows_source = estimate_statement_rows(args, query, query_kind)
             existing_indexes = get_existing_single_column_indexes(args)
             log.write(f"QUERY_BEGIN number={query_number} sql={query}\n")
+            log.write(
+                f"QUERY_KIND kind={query_kind} affected_rows_estimate={affected_rows:.2f} "
+                f"affected_rows_source={affected_rows_source} "
+                f"referenced_columns={sorted(referenced_columns)} "
+                f"modified_columns={sorted(modified_columns)}\n"
+            )
             log.write(f"EXISTING_SINGLE_COLUMN_INDEXES columns={sorted(existing_indexes)}\n")
 
             column_stats, total_accesses = build_column_stats(args, columns, row_count, log)
@@ -828,6 +998,9 @@ def run_online_advisor(args):
                     log.write(
                         f"COLUMN_STATS column={column} access_count={stat['access_count']} "
                         f"total_count={stat.get('total_count', 0)} "
+                        f"insert_count={stat.get('insert_count', 0)} "
+                        f"update_count={stat.get('update_count', 0)} "
+                        f"delete_count={stat.get('delete_count', 0)} "
                         f"access_fraction={stat['access_fraction']:.4f} n_distinct={stat['n_distinct']} "
                         f"distinct_count={stat['distinct_count']:.2f} distinct_ratio={stat['distinct_ratio']:.4f} "
                         f"source={stat['source']} most_common_vals={stat['most_common_vals']} "
@@ -859,6 +1032,15 @@ def run_online_advisor(args):
                     f"min_distinct_ratio={args.min_distinct_ratio:.2f})"
                 )
                 log.write(f"NO_CANDIDATES {message}\n")
+                log.write(
+                    f"QUERY_COST_SUMMARY query_number={query_number} column=none "
+                    f"read_cost_without_index={baseline_cost:.2f} "
+                    f"estimated_without_index_cost=not_applicable_no_candidate "
+                    f"create_index_cost=not_applicable_no_candidate "
+                    f"read_cost_with_index=not_applicable_no_candidate "
+                    f"write_cost=not_applicable_no_candidate "
+                    f"estimated_with_index_cost=not_applicable_no_candidate\n"
+                )
 
             best = None
             for column in candidate_columns:
@@ -874,8 +1056,20 @@ def run_online_advisor(args):
                 hypo = create_hypo_index(args, [column])
                 hypo_plan = explain_plan(args, query, hypo_index_sql=hypo["index_sql"])
                 hypo_cost = float(hypo_plan["total_cost"])
+                maint_costs = estimate_write_maintenance_cost(
+                    stat,
+                    row_count,
+                    cost_settings,
+                )
                 expected_without = baseline_cost * access_count
-                expected_with = create_cost + hypo_cost * access_count
+                expected_with = (
+                    create_cost
+                    + hypo_cost * access_count
+                    + maint_costs["write_maint_cost"]
+                )
+                read_cost_without_index = baseline_cost * access_count
+                read_cost_with_index = hypo_cost * access_count
+                write_cost = maint_costs["write_maint_cost"]
                 improves_expected = expected_with < expected_without
                 record = {
                     "kind": "online_candidate",
@@ -889,6 +1083,15 @@ def run_online_advisor(args):
                     "formula_baseline_cost": baseline_cost,
                     "hypo_scan_cost": hypo_cost,
                     "estimated_create_index_cost": create_cost,
+                    "insert_count": maint_costs["insert_count"],
+                    "update_count": maint_costs["update_count"],
+                    "delete_count": maint_costs["delete_count"],
+                    "c_insert": maint_costs["c_insert"],
+                    "c_update": maint_costs["c_update"],
+                    "c_delete": maint_costs["c_delete"],
+                    "write_index_maint_cost": maint_costs["write_index_maint_cost"],
+                    "stats_maint_cost": maint_costs["stats_maint_cost"],
+                    "write_maint_cost": maint_costs["write_maint_cost"],
                     "expected_without_index": expected_without,
                     "expected_with_index": expected_with,
                     "improves_expected": improves_expected,
@@ -903,8 +1106,21 @@ def run_online_advisor(args):
                     f"explain_baseline_scan_cost={explain_baseline_cost:.2f} "
                     f"formula_baseline_cost={baseline_cost:.2f} hypo_scan_cost={hypo_cost:.2f} "
                     f"create_cost={create_cost:.2f} expected_without_index={expected_without:.2f} "
+                    f"write_index_maint_cost={maint_costs['write_index_maint_cost']:.2f} "
+                    f"stats_maint_cost={maint_costs['stats_maint_cost']:.2f} "
+                    f"write_maint_cost={maint_costs['write_maint_cost']:.2f} "
                     f"expected_with_index={expected_with:.2f} improves_expected={improves_expected} "
                     f"plan={hypo_plan['plan_summary']}\n"
+                )
+                log.write(
+                    f"QUERY_COST_SUMMARY query_number={query_number} column={column} "
+                    f"access_count={access_count} "
+                    f"read_cost_without_index={read_cost_without_index:.2f} "
+                    f"estimated_without_index_cost={expected_without:.2f} "
+                    f"create_index_cost={create_cost:.2f} "
+                    f"read_cost_with_index={read_cost_with_index:.2f} "
+                    f"write_cost={write_cost:.2f} "
+                    f"estimated_with_index_cost={expected_with:.2f}\n"
                 )
                 if improves_expected:
                     if best is None or expected_with < best["expected_with_index"]:
@@ -934,14 +1150,44 @@ def run_online_advisor(args):
                 output = execute_query(args, query)
                 rows_returned = 0 if output == "" else len(output.splitlines())
                 log.write(f"QUERY_EXECUTED number={query_number} rows_returned={rows_returned}\n")
-                referenced_columns = extract_query_columns(query, columns)
-                upsert_column_stats(args, columns, referenced_columns, row_count, log)
+                upsert_column_stats(
+                    args,
+                    columns,
+                    referenced_columns,
+                    modified_columns,
+                    query_kind,
+                    affected_rows,
+                    row_count,
+                    log,
+                )
                 total_increment = len(referenced_columns)
                 log.write(
                     f"Updated stats after query {query_number}: "
                     f"total_count +{total_increment}, "
                     f"access_count +1 for {sorted(referenced_columns) or 'no predicate columns'}\n"
                 )
+                if query_kind in {"INSERT", "UPDATE", "DELETE"}:
+                    writes_since_analyze += 1
+                    if writes_since_analyze >= args.analyze_every_writes:
+                        run_psql(args, f"ANALYZE {qualified_table(args.table)};")
+                        row_count = get_row_count(args)
+                        catalog_stats = get_table_catalog_stats(args)
+                        upsert_column_stats(
+                            args,
+                            columns,
+                            set(),
+                            set(),
+                            "REFRESH",
+                            0,
+                            row_count,
+                            log,
+                        )
+                        writes_since_analyze = 0
+                        log.write(
+                            f"WRITE_ANALYZE query_number={query_number} "
+                            f"analyze_every_writes={args.analyze_every_writes} "
+                            f"rows={row_count} relpages={catalog_stats['relpages']}\n"
+                        )
             else:
                 log.write(f"QUERY_NOT_EXECUTED number={query_number} reason=--no-execute-queries\n")
 
@@ -990,6 +1236,7 @@ def main():
     parser.add_argument("--stats-total-col", default="total_count")
     parser.add_argument("--min-access-fraction", type=float, default=0.05)
     parser.add_argument("--min-distinct-ratio", type=float, default=0.00)
+    parser.add_argument("--analyze-every-writes", type=int, default=1)
     parser.add_argument("--create-concurrently", action="store_true")
     parser.add_argument("--no-execute-queries", dest="execute_queries", action="store_false")
     parser.set_defaults(execute_queries=True)
@@ -1004,6 +1251,7 @@ def main():
         help="Create the lowest-cost real index after logging all candidates.",
     )
     args = parser.parse_args()
+    args.analyze_every_writes = max(args.analyze_every_writes, 1)
 
     if not args.legacy_exhaustive:
         run_online_advisor(args)

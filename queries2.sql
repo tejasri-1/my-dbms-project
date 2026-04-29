@@ -1,0 +1,276 @@
+
+-- CustomerID equality (1-15)
+SELECT * FROM online_retail WHERE CustomerID=14911;
+SELECT * FROM online_retail WHERE CustomerID=12583;
+SELECT * FROM online_retail WHERE CustomerID=14688;
+SELECT * FROM online_retail WHERE CustomerID=17850;
+SELECT * FROM online_retail WHERE CustomerID=13047;
+SELECT * FROM online_retail WHERE CustomerID=15311;
+SELECT * FROM online_retail WHERE CustomerID=12748;
+SELECT * FROM online_retail WHERE CustomerID=16029;
+SELECT * FROM online_retail WHERE CustomerID=14096;
+SELECT * FROM online_retail WHERE CustomerID=18118;
+SELECT * FROM online_retail WHERE CustomerID=17511;
+SELECT * FROM online_retail WHERE CustomerID=15061;
+SELECT * FROM online_retail WHERE CustomerID=13694;
+SELECT * FROM online_retail WHERE CustomerID=17450;
+SELECT * FROM online_retail WHERE CustomerID=15749;
+
+-- InvoiceNo equality (16-30)
+SELECT * FROM online_retail WHERE invoiceno='536365';
+SELECT * FROM online_retail WHERE invoiceno='536366';
+SELECT * FROM online_retail WHERE invoiceno='536367';
+SELECT * FROM online_retail WHERE invoiceno='536368';
+SELECT * FROM online_retail WHERE invoiceno='536369';
+SELECT * FROM online_retail WHERE invoiceno='536370';
+SELECT * FROM online_retail WHERE invoiceno='536371';
+SELECT * FROM online_retail WHERE invoiceno='536372';
+SELECT * FROM online_retail WHERE invoiceno='536373';
+SELECT * FROM online_retail WHERE invoiceno='536374';
+SELECT * FROM online_retail WHERE invoiceno='536375';
+SELECT * FROM online_retail WHERE invoiceno='536376';
+SELECT * FROM online_retail WHERE invoiceno='536377';
+SELECT * FROM online_retail WHERE invoiceno='536378';
+SELECT * FROM online_retail WHERE invoiceno='536379';
+
+-- StockCode equality (31-50)
+SELECT * FROM online_retail WHERE stockcode='85123A';
+SELECT * FROM online_retail WHERE stockcode='71053';
+SELECT * FROM online_retail WHERE stockcode='84406B';
+SELECT * FROM online_retail WHERE stockcode='84406G';
+SELECT * FROM online_retail WHERE stockcode='84406E';
+SELECT * FROM online_retail WHERE stockcode='84029G';
+SELECT * FROM online_retail WHERE stockcode='84029E';
+SELECT * FROM online_retail WHERE stockcode='22752';
+SELECT * FROM online_retail WHERE stockcode='21730';
+SELECT * FROM online_retail WHERE stockcode='22633';
+SELECT * FROM online_retail WHERE stockcode='21212';
+SELECT * FROM online_retail WHERE stockcode='22086';
+SELECT * FROM online_retail WHERE stockcode='22423';
+SELECT * FROM online_retail WHERE stockcode='20725';
+SELECT * FROM online_retail WHERE stockcode='23203';
+SELECT * FROM online_retail WHERE stockcode='84879';
+SELECT * FROM online_retail WHERE stockcode='85099B';
+SELECT * FROM online_retail WHERE stockcode='21987';
+SELECT * FROM online_retail WHERE stockcode='22197';
+SELECT * FROM online_retail WHERE stockcode='22383';
+
+-- Quantity predicates (51-75)
+SELECT * FROM online_retail WHERE quantity=1;
+SELECT * FROM online_retail WHERE quantity=2;
+SELECT * FROM online_retail WHERE quantity=3;
+SELECT * FROM online_retail WHERE quantity=4;
+SELECT * FROM online_retail WHERE quantity=5;
+SELECT * FROM online_retail WHERE quantity=6;
+SELECT * FROM online_retail WHERE quantity=10;
+SELECT * FROM online_retail WHERE quantity=12;
+SELECT * FROM online_retail WHERE quantity=24;
+SELECT * FROM online_retail WHERE quantity=48;
+SELECT * FROM online_retail WHERE quantity>50;
+SELECT * FROM online_retail WHERE quantity>100;
+SELECT * FROM online_retail WHERE quantity>200;
+SELECT * FROM online_retail WHERE quantity<0;
+SELECT * FROM online_retail WHERE quantity<5;
+SELECT * FROM online_retail WHERE quantity<=2;
+SELECT * FROM online_retail WHERE quantity>=100;
+SELECT * FROM online_retail WHERE quantity BETWEEN 5 AND 20;
+SELECT * FROM online_retail WHERE quantity BETWEEN 20 AND 50;
+SELECT * FROM online_retail WHERE quantity BETWEEN 50 AND 100;
+SELECT * FROM online_retail WHERE quantity<>1;
+SELECT * FROM online_retail WHERE quantity>500;
+SELECT * FROM online_retail WHERE quantity<3;
+SELECT * FROM online_retail WHERE quantity BETWEEN 100 AND 500;
+SELECT * FROM online_retail WHERE quantity>=250;
+
+-- Unitprice (76-90)
+SELECT * FROM online_retail WHERE unitprice=0.85;
+SELECT * FROM online_retail WHERE unitprice=1.25;
+SELECT * FROM online_retail WHERE unitprice=2.55;
+SELECT * FROM online_retail WHERE unitprice=3.75;
+SELECT * FROM online_retail WHERE unitprice=4.95;
+SELECT * FROM online_retail WHERE unitprice>5;
+SELECT * FROM online_retail WHERE unitprice>10;
+SELECT * FROM online_retail WHERE unitprice>20;
+SELECT * FROM online_retail WHERE unitprice<1;
+SELECT * FROM online_retail WHERE unitprice<2;
+SELECT * FROM online_retail WHERE unitprice BETWEEN 2 AND 8;
+SELECT * FROM online_retail WHERE unitprice BETWEEN 5 AND 15;
+SELECT * FROM online_retail WHERE unitprice>=25;
+SELECT * FROM online_retail WHERE unitprice<=0.5;
+SELECT * FROM online_retail WHERE unitprice<>2.55;
+
+-- Date predicates (91-105)
+SELECT * FROM online_retail WHERE invoicedate>='2011-01-01';
+SELECT * FROM online_retail WHERE invoicedate>='2011-03-01';
+SELECT * FROM online_retail WHERE invoicedate>='2011-06-01';
+SELECT * FROM online_retail WHERE invoicedate<'2011-02-01';
+SELECT * FROM online_retail WHERE invoicedate<'2011-07-01';
+SELECT * FROM online_retail WHERE invoicedate BETWEEN '2011-01-01' AND '2011-01-31';
+SELECT * FROM online_retail WHERE invoicedate BETWEEN '2011-02-01' AND '2011-03-31';
+SELECT * FROM online_retail WHERE invoicedate BETWEEN '2011-06-01' AND '2011-12-01';
+SELECT * FROM online_retail WHERE invoicedate>='2011-08-01';
+SELECT * FROM online_retail WHERE invoicedate<'2011-10-01';
+SELECT * FROM online_retail WHERE invoicedate BETWEEN '2011-04-01' AND '2011-05-01';
+SELECT * FROM online_retail WHERE invoicedate BETWEEN '2011-09-01' AND '2011-10-15';
+SELECT * FROM online_retail WHERE invoicedate>='2011-11-01';
+SELECT * FROM online_retail WHERE invoicedate<'2010-12-31';
+SELECT * FROM online_retail WHERE invoicedate BETWEEN '2010-12-01' AND '2010-12-31';
+
+-- Country equality (106-120)
+SELECT * FROM online_retail WHERE country='United Kingdom';
+SELECT * FROM online_retail WHERE country='France';
+SELECT * FROM online_retail WHERE country='Germany';
+SELECT * FROM online_retail WHERE country='Netherlands';
+SELECT * FROM online_retail WHERE country='Spain';
+SELECT * FROM online_retail WHERE country='Belgium';
+SELECT * FROM online_retail WHERE country='Switzerland';
+SELECT * FROM online_retail WHERE country='Portugal';
+SELECT * FROM online_retail WHERE country='Australia';
+SELECT * FROM online_retail WHERE country='EIRE';
+SELECT * FROM online_retail WHERE country='Norway';
+SELECT * FROM online_retail WHERE country='Italy';
+SELECT * FROM online_retail WHERE country='Sweden';
+SELECT * FROM online_retail WHERE country='Japan';
+SELECT * FROM online_retail WHERE country='Denmark';
+
+
+INSERT INTO online_retail VALUES ('900001','S1001','ITEM1',5,'2011-12-01',1.50,20001,'UK');
+INSERT INTO online_retail VALUES ('900002','S1002','ITEM2',8,'2011-12-01',2.50,20002,'France');
+INSERT INTO online_retail VALUES ('900003','S1003','ITEM3',3,'2011-12-01',4.10,20003,'Germany');
+INSERT INTO online_retail VALUES ('900004','S1004','ITEM4',9,'2011-12-01',3.70,20004,'Spain');
+INSERT INTO online_retail VALUES ('900005','S1005','ITEM5',15,'2011-12-01',5.20,20005,'UK');
+INSERT INTO online_retail VALUES ('900006','S1006','ITEM6',4,'2011-12-01',1.10,20006,'UK');
+INSERT INTO online_retail VALUES ('900007','S1007','ITEM7',11,'2011-12-01',6.50,20007,'Belgium');
+INSERT INTO online_retail VALUES ('900008','S1008','ITEM8',7,'2011-12-01',2.10,20008,'Italy');
+INSERT INTO online_retail VALUES ('900009','S1009','ITEM9',20,'2011-12-01',8.50,20009,'Sweden');
+INSERT INTO online_retail VALUES ('900010','S1010','ITEM10',6,'2011-12-01',3.20,20010,'UK');
+INSERT INTO online_retail VALUES ('900011','S1011','ITEM11',14,'2011-12-01',4.90,20011,'UK');
+INSERT INTO online_retail VALUES ('900012','S1012','ITEM12',2,'2011-12-01',0.95,20012,'France');
+INSERT INTO online_retail VALUES ('900013','S1013','ITEM13',18,'2011-12-01',7.10,20013,'Germany');
+INSERT INTO online_retail VALUES ('900014','S1014','ITEM14',30,'2011-12-01',9.10,20014,'Spain');
+INSERT INTO online_retail VALUES ('900015','S1015','ITEM15',5,'2011-12-01',1.70,20015,'UK');
+INSERT INTO online_retail VALUES ('900016','S1016','ITEM16',13,'2011-12-01',2.70,20016,'UK');
+INSERT INTO online_retail VALUES ('900017','S1017','ITEM17',16,'2011-12-01',5.70,20017,'Norway');
+INSERT INTO online_retail VALUES ('900018','S1018','ITEM18',22,'2011-12-01',6.70,20018,'Japan');
+INSERT INTO online_retail VALUES ('900019','S1019','ITEM19',12,'2011-12-01',3.30,20019,'UK');
+INSERT INTO online_retail VALUES ('900020','S1020','ITEM20',17,'2011-12-01',4.30,20020,'UK');
+INSERT INTO online_retail VALUES ('900021','S1021','ITEM21',5,'2011-12-01',1.55,20021,'UK');
+INSERT INTO online_retail VALUES ('900022','S1022','ITEM22',8,'2011-12-01',2.55,20022,'France');
+INSERT INTO online_retail VALUES ('900023','S1023','ITEM23',3,'2011-12-01',4.15,20023,'Germany');
+INSERT INTO online_retail VALUES ('900024','S1024','ITEM24',9,'2011-12-01',3.75,20024,'Spain');
+INSERT INTO online_retail VALUES ('900025','S1025','ITEM25',15,'2011-12-01',5.25,20025,'UK');
+INSERT INTO online_retail VALUES ('900026','S1026','ITEM26',4,'2011-12-01',1.15,20026,'UK');
+INSERT INTO online_retail VALUES ('900027','S1027','ITEM27',11,'2011-12-01',6.55,20027,'Belgium');
+INSERT INTO online_retail VALUES ('900028','S1028','ITEM28',7,'2011-12-01',2.15,20028,'Italy');
+INSERT INTO online_retail VALUES ('900029','S1029','ITEM29',20,'2011-12-01',8.55,20029,'Sweden');
+INSERT INTO online_retail VALUES ('900030','S1030','ITEM30',6,'2011-12-01',3.25,20030,'UK');
+INSERT INTO online_retail VALUES ('900031','S1031','ITEM31',14,'2011-12-01',4.95,20031,'UK');
+INSERT INTO online_retail VALUES ('900032','S1032','ITEM32',2,'2011-12-01',0.99,20032,'France');
+INSERT INTO online_retail VALUES ('900033','S1033','ITEM33',18,'2011-12-01',7.15,20033,'Germany');
+INSERT INTO online_retail VALUES ('900034','S1034','ITEM34',30,'2011-12-01',9.15,20034,'Spain');
+INSERT INTO online_retail VALUES ('900035','S1035','ITEM35',5,'2011-12-01',1.75,20035,'UK');
+INSERT INTO online_retail VALUES ('900036','S1036','ITEM36',13,'2011-12-01',2.75,20036,'UK');
+INSERT INTO online_retail VALUES ('900037','S1037','ITEM37',16,'2011-12-01',5.75,20037,'Norway');
+INSERT INTO online_retail VALUES ('900038','S1038','ITEM38',22,'2011-12-01',6.75,20038,'Japan');
+INSERT INTO online_retail VALUES ('900039','S1039','ITEM39',12,'2011-12-01',3.35,20039,'UK');
+INSERT INTO online_retail VALUES ('900040','S1040','ITEM40',17,'2011-12-01',4.35,20040,'UK');
+INSERT INTO online_retail VALUES ('900041','S1041','ITEM41',19,'2011-12-01',7.99,20041,'Portugal');
+INSERT INTO online_retail VALUES ('900042','S1042','ITEM42',10,'2011-12-01',2.99,20042,'Denmark');
+INSERT INTO online_retail VALUES ('900043','S1043','ITEM43',25,'2011-12-01',10.99,20043,'Australia');
+
+-- equality predicate update non-indexed attr (35)
+UPDATE online_retail SET quantity=quantity+1 WHERE CustomerID=14911;
+UPDATE online_retail SET quantity=quantity+2 WHERE CustomerID=12583;
+UPDATE online_retail SET quantity=quantity+3 WHERE CustomerID=14688;
+UPDATE online_retail SET quantity=quantity+4 WHERE CustomerID=17850;
+UPDATE online_retail SET unitprice=unitprice*1.02 WHERE stockcode='85123A';
+UPDATE online_retail SET unitprice=unitprice*1.02 WHERE stockcode='71053';
+UPDATE online_retail SET unitprice=unitprice*1.02 WHERE stockcode='84406B';
+UPDATE online_retail SET unitprice=unitprice*1.02 WHERE stockcode='84406G';
+UPDATE online_retail SET country='France' WHERE CustomerID=13047;
+UPDATE online_retail SET country='Germany' WHERE CustomerID=15311;
+UPDATE online_retail SET quantity=quantity+5 WHERE quantity=1;
+UPDATE online_retail SET quantity=quantity+5 WHERE quantity=2;
+UPDATE online_retail SET quantity=quantity+5 WHERE quantity=3;
+UPDATE online_retail SET quantity=quantity+5 WHERE quantity=4;
+UPDATE online_retail SET quantity=quantity+5 WHERE quantity=5;
+UPDATE online_retail SET unitprice=3.99 WHERE invoiceno='536365';
+UPDATE online_retail SET unitprice=4.99 WHERE invoiceno='536366';
+UPDATE online_retail SET unitprice=5.99 WHERE invoiceno='536367';
+UPDATE online_retail SET unitprice=6.99 WHERE invoiceno='536368';
+UPDATE online_retail SET unitprice=7.99 WHERE invoiceno='536369';
+UPDATE online_retail SET quantity=quantity+1 WHERE CustomerID=16029;
+UPDATE online_retail SET quantity=quantity+1 WHERE CustomerID=14096;
+UPDATE online_retail SET quantity=quantity+1 WHERE CustomerID=18118;
+UPDATE online_retail SET quantity=quantity+1 WHERE CustomerID=17511;
+UPDATE online_retail SET quantity=quantity+1 WHERE CustomerID=15061;
+UPDATE online_retail SET country='Belgium' WHERE CustomerID=13694;
+UPDATE online_retail SET country='Spain' WHERE CustomerID=17450;
+UPDATE online_retail SET country='Italy' WHERE CustomerID=15749;
+UPDATE online_retail SET unitprice=unitprice*1.01 WHERE stockcode='84029G';
+UPDATE online_retail SET unitprice=unitprice*1.01 WHERE stockcode='84029E';
+UPDATE online_retail SET unitprice=unitprice*1.01 WHERE stockcode='22752';
+UPDATE online_retail SET unitprice=unitprice*1.01 WHERE stockcode='21730';
+UPDATE online_retail SET unitprice=unitprice*1.01 WHERE stockcode='22633';
+UPDATE online_retail SET quantity=quantity+10 WHERE quantity>100;
+UPDATE online_retail SET quantity=quantity+10 WHERE quantity>200;
+
+-- indexed column modification (15)
+UPDATE online_retail SET CustomerID=21001 WHERE CustomerID=14911;
+UPDATE online_retail SET CustomerID=21002 WHERE CustomerID=12583;
+UPDATE online_retail SET CustomerID=21003 WHERE CustomerID=14688;
+UPDATE online_retail SET stockcode='X1001' WHERE stockcode='85123A';
+UPDATE online_retail SET stockcode='X1002' WHERE stockcode='71053';
+UPDATE online_retail SET stockcode='X1003' WHERE stockcode='84406B';
+UPDATE online_retail SET stockcode='X1004' WHERE stockcode='84406G';
+UPDATE online_retail SET stockcode='X1005' WHERE stockcode='84406E';
+UPDATE online_retail SET invoiceno='900500' WHERE invoiceno='536370';
+UPDATE online_retail SET invoiceno='900501' WHERE invoiceno='536371';
+UPDATE online_retail SET invoiceno='900502' WHERE invoiceno='536372';
+UPDATE online_retail SET country='Austria' WHERE country='Portugal';
+UPDATE online_retail SET country='Finland' WHERE country='Denmark';
+UPDATE online_retail SET unitprice=unitprice+1 WHERE unitprice<1;
+UPDATE online_retail SET quantity=quantity-1 WHERE quantity>=250;
+
+-- range updates (15)
+UPDATE online_retail SET unitprice=unitprice*1.05 WHERE unitprice BETWEEN 2 AND 8;
+UPDATE online_retail SET unitprice=unitprice*1.05 WHERE unitprice BETWEEN 5 AND 15;
+UPDATE online_retail SET quantity=quantity+2 WHERE quantity BETWEEN 5 AND 20;
+UPDATE online_retail SET quantity=quantity+2 WHERE quantity BETWEEN 20 AND 50;
+UPDATE online_retail SET quantity=quantity+2 WHERE quantity BETWEEN 50 AND 100;
+UPDATE online_retail SET quantity=quantity+2 WHERE quantity BETWEEN 100 AND 500;
+UPDATE online_retail SET unitprice=unitprice*.95 WHERE unitprice>20;
+UPDATE online_retail SET unitprice=unitprice*.95 WHERE unitprice>10;
+UPDATE online_retail SET quantity=0 WHERE quantity<0;
+UPDATE online_retail SET country='UK' WHERE country='EIRE';
+UPDATE online_retail SET quantity=quantity+3 WHERE invoicedate>='2011-11-01';
+UPDATE online_retail SET quantity=quantity+3 WHERE invoicedate<'2011-02-01';
+UPDATE online_retail SET unitprice=unitprice+0.5 WHERE invoicedate>='2011-06-01';
+UPDATE online_retail SET unitprice=unitprice-0.2 WHERE invoicedate<'2011-07-01';
+UPDATE online_retail SET quantity=quantity+1 WHERE country='United Kingdom';
+
+DELETE FROM online_retail WHERE CustomerID=21001;
+DELETE FROM online_retail WHERE CustomerID=21002;
+DELETE FROM online_retail WHERE CustomerID=21003;
+DELETE FROM online_retail WHERE invoiceno='900500';
+DELETE FROM online_retail WHERE invoiceno='900501';
+DELETE FROM online_retail WHERE invoiceno='900502';
+DELETE FROM online_retail WHERE stockcode='X1001';
+DELETE FROM online_retail WHERE stockcode='X1002';
+DELETE FROM online_retail WHERE stockcode='X1003';
+DELETE FROM online_retail WHERE quantity<0;
+DELETE FROM online_retail WHERE quantity>500;
+DELETE FROM online_retail WHERE quantity BETWEEN 100 AND 500;
+DELETE FROM online_retail WHERE unitprice>25;
+DELETE FROM online_retail WHERE unitprice<0.5;
+DELETE FROM online_retail WHERE country='Channel Islands';
+DELETE FROM online_retail WHERE country='Austria';
+DELETE FROM online_retail WHERE invoicedate<'2010-12-31';
+DELETE FROM online_retail WHERE invoicedate BETWEEN '2010-12-01' AND '2010-12-31';
+DELETE FROM online_retail WHERE CustomerID=20041;
+DELETE FROM online_retail WHERE CustomerID=20042;
+DELETE FROM online_retail WHERE CustomerID=20043;
+DELETE FROM online_retail WHERE stockcode='S1043';
+
+
+
