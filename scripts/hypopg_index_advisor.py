@@ -5,6 +5,7 @@ costs for the no-index baseline and every hypothetical index candidate.
 """
 
 import argparse
+import csv
 import itertools
 import json
 import math
@@ -12,6 +13,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 
 
@@ -213,6 +215,7 @@ def get_table_catalog_stats(args):
 def get_planner_cost_settings(args):
     names = [
         "seq_page_cost",
+        "random_page_cost",
         "cpu_tuple_cost",
         "cpu_operator_cost",
     ]
@@ -246,6 +249,77 @@ def estimate_btree_create_cost(row_count, relpages, column_count, cost_settings)
     key_cpu_cost = rows * max(column_count, 1) * cpu_operator_cost
     sort_build_cost = rows * math.log2(max(rows, 2.0)) * cpu_operator_cost
     return table_scan_cost + key_cpu_cost + sort_build_cost
+
+
+def estimate_seq_scan_cost(row_count, relpages, cost_settings):
+    rows = max(float(row_count), 1.0)
+    pages = max(float(relpages), 1.0)
+    seq_page_cost = cost_settings.get("seq_page_cost", 1.0)
+    cpu_tuple_cost = cost_settings.get("cpu_tuple_cost", 0.01)
+    return pages * seq_page_cost + rows * cpu_tuple_cost
+
+
+def parse_pg_array_text(value):
+    if not value:
+        return []
+    text = value.strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return [text]
+    inner = text[1:-1]
+    if not inner:
+        return []
+    reader = csv.reader(StringIO(inner), quotechar='"', escapechar="\\")
+    return [item for item in next(reader, [])]
+
+
+def parse_pg_float_array_text(value):
+    result = []
+    for item in parse_pg_array_text(value):
+        try:
+            result.append(float(item))
+        except ValueError:
+            continue
+    return result
+
+
+def extract_equality_values(query, columns):
+    result = {}
+    normalized = normalize_column_map(columns)
+    for lower_name, original_name in normalized.items():
+        pattern = (
+            r"(?<![a-zA-Z0-9_\.])"
+            + re.escape(lower_name)
+            + r"(?![a-zA-Z0-9_])\s*=\s*"
+            r"('(?:''|[^'])*'|[-+]?\d+(?:\.\d+)?|[a-zA-Z_][a-zA-Z0-9_]*)"
+        )
+        match = re.search(pattern, query, flags=re.IGNORECASE)
+        if not match:
+            continue
+        raw = match.group(1).strip()
+        if raw.startswith("'") and raw.endswith("'"):
+            raw = raw[1:-1].replace("''", "'")
+        result[original_name.lower()] = raw
+    return result
+
+
+def estimate_matching_rows(row_count, stat, equality_value):
+    rows = max(float(row_count), 1.0)
+    distinct_count = max(float(stat.get("distinct_count", 0.0)), 1.0)
+    mcv_values = parse_pg_array_text(stat.get("most_common_vals", ""))
+    mcv_freqs = parse_pg_float_array_text(stat.get("most_common_freqs", ""))
+
+    if equality_value is not None:
+        equality_text = str(equality_value)
+        for value, freq in zip(mcv_values, mcv_freqs):
+            if str(value) == equality_text or str(value).lower() == equality_text.lower():
+                estimated = rows * max(freq, 0.0)
+                return max(1.0, min(estimated, rows)), "most_common_value"
+
+    mcv_freq_sum = min(max(sum(mcv_freqs), 0.0), 1.0)
+    non_mcv_rows = max(rows * (1.0 - mcv_freq_sum), 1.0)
+    non_mcv_distinct = max(distinct_count - len(mcv_values), 1.0)
+    estimated = non_mcv_rows / non_mcv_distinct
+    return max(1.0, min(estimated, rows)), "non_mcv_distinct_average"
 
 
 def qualified_table(table_name):
@@ -288,6 +362,44 @@ def create_real_index(args, columns):
     )
     run_psql(args, sql)
     return index_name, sql
+
+
+def drop_real_index(args, index_name):
+    if "." in index_name:
+        sql = f"DROP INDEX IF EXISTS {qualified_table(index_name)};"
+    else:
+        sql = f"DROP INDEX IF EXISTS {quote_ident(index_name)};"
+    run_psql(args, sql)
+    return sql
+
+
+def get_existing_advisor_indexes(args):
+    schema, table = split_table_name(args.table)
+    prefix = candidate_name(args.table, [""]).removesuffix("__idx")
+    sql = f"""
+        SELECT n.nspname || '.' || c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_index i ON i.indexrelid = c.oid
+        JOIN pg_class t ON t.oid = i.indrelid
+        JOIN pg_namespace tn ON tn.oid = t.relnamespace
+        WHERE c.relkind = 'i'
+          AND tn.nspname = {quote_literal(schema)}
+          AND t.relname = {quote_literal(table)}
+          AND c.relname LIKE {quote_literal(prefix + '%_idx')};
+    """
+    output = run_psql(args, sql)
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def drop_existing_advisor_indexes(args, log):
+    dropped = []
+    for index_name in get_existing_advisor_indexes(args):
+        drop_sql = drop_real_index(args, index_name)
+        dropped.append(index_name)
+        log.write(f"DROP_STARTUP_ADVISOR_INDEX index={index_name} sql={drop_sql}\n")
+    log.write(f"DROPPED_STARTUP_ADVISOR_INDEXES indexes={dropped}\n")
+    return dropped
 
 
 def get_existing_single_column_indexes(args):
@@ -611,7 +723,11 @@ def build_column_stats(args, columns, row_count, log):
 
 def choose_candidate_columns(args, columns, column_stats, total_accesses, existing_indexes, log):
     candidates = []
-    log.write("CANDIDATE_SELECTION source=stats_table_or_pg_stats query_reference_required=false\n")
+    access_threshold = max(args.min_access_fraction, 2.0 / max(len(columns), 1))
+    log.write(
+        "CANDIDATE_SELECTION source=stats_table_or_pg_stats "
+        f"query_reference_required=false access_threshold={access_threshold:.4f}\n"
+    )
 
     for column in columns:
         key = column.lower()
@@ -622,14 +738,14 @@ def choose_candidate_columns(args, columns, column_stats, total_accesses, existi
         if key in existing_indexes:
             log.write(f"CANDIDATE_SKIP column={column} reason=real_index_already_exists\n")
             continue
-        if total_accesses <= 0 or stat["access_fraction"] <= args.min_access_fraction:
+        if total_accesses <= 0 or stat["access_fraction"] <= access_threshold:
             log.write(
                 f"CANDIDATE_SKIP column={column} reason=access_fraction "
                 f"access_count={stat['access_count']} access_fraction={stat.get('access_fraction', 0):.4f} "
-                f"threshold={args.min_access_fraction:.4f}\n"
+                f"threshold={access_threshold:.4f}\n"
             )
             continue
-        if stat["distinct_ratio"] <= args.min_distinct_ratio:
+        if stat["distinct_ratio"] < args.min_distinct_ratio:
             log.write(
                 f"CANDIDATE_SKIP column={column} reason=distinct_ratio "
                 f"distinct_ratio={stat['distinct_ratio']:.4f} threshold={args.min_distinct_ratio:.4f}\n"
@@ -671,24 +787,31 @@ def run_online_advisor(args):
     ) as jsonl:
         log.write(f"Online HypoPG advisor run: {datetime.now().isoformat()}\n")
         reset_stats_table(args, log)
+        startup_dropped_indexes = drop_existing_advisor_indexes(args, log)
         log.write("FORMULA\n")
         log.write("  after each executed query, update public.auto_index_column_stats for the table columns\n")
         log.write("  total_count means total predicate-column accesses processed for this table so far\n")
         log.write("  per query: total_count += number of predicate columns referenced by that query\n")
         log.write("  access_count is read only from the PostgreSQL-collected stats table, never precomputed from queries.sql before execution\n")
-        log.write("  eligible_column = access_count / total_count > 0.10 AND distinct_count / row_count > 0.00\n")
+        log.write("  eligible_column = access_count / total_count > max(0.05, 2/total_columns) AND distinct_count / row_count > 0.00\n")
         log.write("  candidate selection does not require the column to appear in the current query\n")
         log.write("  skip HypoPG if a real single-column index already exists on that column; evaluate remaining columns\n")
-        log.write("  baseline_scan_cost = EXPLAIN cost with no hypothetical index\n")
-        log.write("  hypo_scan_cost = EXPLAIN cost after hypopg_reset() + hypopg_create_index(candidate)\n")
+        log.write("  explain_baseline_scan_cost = EXPLAIN cost with no hypothetical index, logged for comparison\n")
+        log.write("  hypo_scan_cost = EXPLAIN cost after hypopg_reset() + hypopg_create_index(candidate), logged for comparison\n")
+        log.write("  baseline_cost = relpages*seq_page_cost + rows*cpu_tuple_cost\n")
         log.write("  create_cost = relpages*seq_page_cost + rows*cpu_tuple_cost + rows*index_columns*cpu_operator_cost + rows*log2(rows)*cpu_operator_cost\n")
-        log.write("  expected_without_index = baseline_scan_cost * access_count\n")
-        log.write("  expected_with_index = create_cost + hypo_scan_cost * access_count\n")
+        log.write("  expected_without_index = access_count * baseline_cost\n")
+        log.write("  expected_with_index = create_cost + access_count * hypo_scan_cost\n")
         log.write("  create real index when expected_with_index < expected_without_index\n\n")
         log.write(f"table={args.table} rows={row_count} columns={columns}\n")
         log.write(f"catalog_stats relpages={catalog_stats['relpages']} reltuples={catalog_stats['reltuples']}\n")
         log.write(f"planner_cost_settings={cost_settings}\n")
-        log.write(f"thresholds min_access_fraction={args.min_access_fraction} min_distinct_ratio={args.min_distinct_ratio}\n")
+        log.write(f"startup_dropped_indexes={startup_dropped_indexes}\n")
+        log.write(
+            f"thresholds min_access_fraction_floor={args.min_access_fraction} "
+            f"dynamic_access_fraction={max(args.min_access_fraction, 2.0 / max(len(columns), 1)):.4f} "
+            f"min_distinct_ratio={args.min_distinct_ratio}\n"
+        )
         log.write(f"queries={len(queries)}\n\n")
 
         created_indexes = []
@@ -713,9 +836,15 @@ def run_online_advisor(args):
 
             run_psql(args, "SELECT hypopg_reset();")
             baseline_plan = explain_plan(args, query)
-            baseline_cost = float(baseline_plan["total_cost"])
+            explain_baseline_cost = float(baseline_plan["total_cost"])
+            baseline_cost = estimate_seq_scan_cost(
+                row_count,
+                catalog_stats["relpages"],
+                cost_settings,
+            )
             log.write(
-                f"BASELINE_SCAN node={baseline_plan['node_type']} cost={baseline_cost:.2f} "
+                f"BASELINE_SCAN node={baseline_plan['node_type']} explain_cost={explain_baseline_cost:.2f} "
+                f"formula_cost={baseline_cost:.2f} "
                 f"rows={baseline_plan['plan_rows']} plan={baseline_plan['plan_summary']}\n"
             )
 
@@ -726,15 +855,15 @@ def run_online_advisor(args):
                 message = (
                     f"Query {query_number}: no HypoPG candidates passed stats filters "
                     f"(total_count={total_accesses}, "
-                    f"min_access_fraction={args.min_access_fraction:.2f}, "
+                    f"access_threshold={max(args.min_access_fraction, 2.0 / max(len(columns), 1)):.2f}, "
                     f"min_distinct_ratio={args.min_distinct_ratio:.2f})"
                 )
-                print(message, flush=True)
                 log.write(f"NO_CANDIDATES {message}\n")
 
             best = None
             for column in candidate_columns:
                 stat = column_stats[column.lower()]
+                access_count = max(int(stat["access_count"]), 1)
                 create_cost = estimate_btree_create_cost(
                     row_count,
                     catalog_stats["relpages"],
@@ -745,18 +874,19 @@ def run_online_advisor(args):
                 hypo = create_hypo_index(args, [column])
                 hypo_plan = explain_plan(args, query, hypo_index_sql=hypo["index_sql"])
                 hypo_cost = float(hypo_plan["total_cost"])
-                expected_without = baseline_cost * max(stat["access_count"], 1)
-                expected_with = create_cost + hypo_cost * max(stat["access_count"], 1)
+                expected_without = baseline_cost * access_count
+                expected_with = create_cost + hypo_cost * access_count
                 improves_expected = expected_with < expected_without
                 record = {
                     "kind": "online_candidate",
                     "query_number": query_number,
                     "query": query,
                     "column": column,
-                    "access_count": stat["access_count"],
+                    "access_count": access_count,
                     "access_fraction": stat["access_fraction"],
                     "distinct_ratio": stat["distinct_ratio"],
-                    "baseline_scan_cost": baseline_cost,
+                    "baseline_scan_cost": explain_baseline_cost,
+                    "formula_baseline_cost": baseline_cost,
                     "hypo_scan_cost": hypo_cost,
                     "estimated_create_index_cost": create_cost,
                     "expected_without_index": expected_without,
@@ -770,18 +900,11 @@ def run_online_advisor(args):
                 jsonl.write(json.dumps(record, sort_keys=True) + "\n")
                 log.write(
                     f"HYPOPG_RESULT column={column} hypopg_index={hypo['hypopg_indexname']} "
-                    f"baseline_scan_cost={baseline_cost:.2f} hypo_scan_cost={hypo_cost:.2f} "
+                    f"explain_baseline_scan_cost={explain_baseline_cost:.2f} "
+                    f"formula_baseline_cost={baseline_cost:.2f} hypo_scan_cost={hypo_cost:.2f} "
                     f"create_cost={create_cost:.2f} expected_without_index={expected_without:.2f} "
                     f"expected_with_index={expected_with:.2f} improves_expected={improves_expected} "
                     f"plan={hypo_plan['plan_summary']}\n"
-                )
-                print(
-                    f"Query {query_number} column {column}: "
-                    f"create_cost={create_cost:.2f}, "
-                    f"expected_without_index={expected_without:.2f}, "
-                    f"expected_with_index={expected_with:.2f}, "
-                    f"decision={'candidate_for_create' if improves_expected else 'do_not_create'}",
-                    flush=True,
                 )
                 if improves_expected:
                     if best is None or expected_with < best["expected_with_index"]:
@@ -792,10 +915,6 @@ def run_online_advisor(args):
             created_index = None
             if best is not None:
                 created_index, real_index_sql = create_real_index(args, [best["column"]])
-                print(
-                    f"Created index {created_index} on column {best['column']}: {real_index_sql}",
-                    flush=True,
-                )
                 created_indexes.append(created_index)
                 run_psql(args, f"ANALYZE {qualified_table(args.table)};")
                 log.write(
@@ -818,11 +937,10 @@ def run_online_advisor(args):
                 referenced_columns = extract_query_columns(query, columns)
                 upsert_column_stats(args, columns, referenced_columns, row_count, log)
                 total_increment = len(referenced_columns)
-                print(
+                log.write(
                     f"Updated stats after query {query_number}: "
                     f"total_count +{total_increment}, "
-                    f"access_count +1 for {sorted(referenced_columns) or 'no predicate columns'}",
-                    flush=True,
+                    f"access_count +1 for {sorted(referenced_columns) or 'no predicate columns'}\n"
                 )
             else:
                 log.write(f"QUERY_NOT_EXECUTED number={query_number} reason=--no-execute-queries\n")
@@ -843,11 +961,14 @@ def run_online_advisor(args):
             log.write(f"QUERY_END number={query_number}\n\n")
 
         log.write(f"CREATED_INDEXES indexes={created_indexes}\n")
+        dropped_indexes = []
+        for index_name in created_indexes:
+            drop_sql = drop_real_index(args, index_name)
+            dropped_indexes.append(index_name)
+            log.write(f"DROP_CREATED_INDEX index={index_name} sql={drop_sql}\n")
+        log.write(f"DROPPED_CREATED_INDEXES indexes={dropped_indexes}\n")
 
-    print(f"Processed {len(queries)} queries with online HypoPG advisor.")
-    print(f"Created indexes: {created_indexes or 'none'}")
-    print(f"Logs: {log_path}")
-    print(f"Candidate JSONL: {jsonl_path}")
+    print(f"Created indexes then dropped: {created_indexes or 'none'}")
 
 
 def main():
@@ -867,7 +988,7 @@ def main():
     parser.add_argument("--stats-access-col", default="access_count")
     parser.add_argument("--stats-ndistinct-col", default="n_distinct")
     parser.add_argument("--stats-total-col", default="total_count")
-    parser.add_argument("--min-access-fraction", type=float, default=0.10)
+    parser.add_argument("--min-access-fraction", type=float, default=0.05)
     parser.add_argument("--min-distinct-ratio", type=float, default=0.00)
     parser.add_argument("--create-concurrently", action="store_true")
     parser.add_argument("--no-execute-queries", dest="execute_queries", action="store_false")
