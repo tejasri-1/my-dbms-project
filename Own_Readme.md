@@ -110,9 +110,89 @@ This will:
 
 # at the start of the session, for phase 1 
 
+# Stage 5: internal live workload capture
 
+Stage 5 removes the need to manually insert every query into
+`public.auto_index_advisor_workload`. The extension now uses a planner hook to
+capture live `SELECT` statements that mention the configured target table.
 
+Install the rebuilt extension and restart PostgreSQL 14:
 
+```bash
+sudo make -C contrib/auto_index_advisor USE_PGXS=1 PG_CONFIG=/usr/bin/pg_config install
+sudo pg_ctlcluster 14 main restart
+```
+
+Enable live capture and test-cleanup behavior:
+
+```sql
+ALTER SYSTEM SET auto_index_advisor.enabled = 'off';
+ALTER SYSTEM SET auto_index_advisor.capture_workload = 'on';
+ALTER SYSTEM SET auto_index_advisor.drop_indexes_before_run = 'on';
+ALTER SYSTEM SET auto_index_advisor.drop_indexes_after_apply = 'on';
+ALTER SYSTEM SET auto_index_advisor.auto_create = 'off';
+ALTER SYSTEM SET auto_index_advisor.max_indexes_per_run = '1';
+SELECT pg_reload_conf();
+```
+
+For this controlled test, `enabled = off` pauses the background worker while the
+planner hook still captures the workload. `auto_index_advisor_run_test_cycle()`
+uses a forced manual run, so it can still apply and clean up recommendations.
+
+Run a clean test cycle:
+
+```sql
+SELECT auto_index_advisor_drop_indexes();
+TRUNCATE public.auto_index_advisor_workload;
+TRUNCATE public.auto_index_advisor_log;
+```
+
+Now execute the workload normally. These queries are captured automatically:
+
+```bash
+psql -d postgres -f queries.sql > /tmp/auto_index_advisor_queries.out
+```
+
+Verify Stage 5 captured the workload:
+
+```sql
+SELECT count(*) AS captured_queries
+FROM public.auto_index_advisor_workload
+WHERE enabled;
+
+SELECT log_id, logged_at, event, message
+FROM public.auto_index_advisor_log
+ORDER BY log_id;
+```
+
+Run the advisor after all workload queries have finished:
+
+```sql
+SELECT auto_index_advisor_run_test_cycle();
+SELECT auto_index_advisor_apply_recommendations();
+SELECT auto_index_advisor_drop_indexes();
+```
+
+`auto_index_advisor_run_test_cycle()` refreshes/costs recommendations. The apply
+and cleanup commands are intentionally separate SQL statements so PostgreSQL
+executes Stage 4 create and cleanup in separate transactions.
+
+Verify recommendations and cleanup:
+
+```sql
+SELECT column_name, improves_expected, create_status, created_index_name
+FROM public.auto_index_advisor_recommendations
+ORDER BY expected_with_index NULLS LAST;
+
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = 'public'
+  AND tablename = 'online_retail'
+  AND indexname LIKE 'auto_advisor_%_idx';
+```
+
+Expected cleanup result: the final `pg_indexes` query should return zero rows
+when `auto_index_advisor.drop_indexes_after_apply = on`.
 
 
 

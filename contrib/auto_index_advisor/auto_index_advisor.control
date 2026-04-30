@@ -1,0 +1,5 @@
+# auto_index_advisor extension
+comment = 'background worker for online index-advisor observation'
+default_version = '1.0'
+module_pathname = '$libdir/auto_index_advisor'
+relocatable = true

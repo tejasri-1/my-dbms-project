@@ -1306,6 +1306,8 @@ def run_online_advisor(args):
         log.write(f"DROPPED_CREATED_INDEXES indexes={dropped_indexes}\n")
 
     print(f"Created indexes then dropped: {created_indexes or 'none'}")
+    print(f"Logs: {log_path.resolve()}")
+    print(f"Candidate JSONL: {jsonl_path.resolve()}")
 
 
 def main():
