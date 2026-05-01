@@ -111,6 +111,8 @@ static char *advisor_drop_created_indexes(bool emit_log, int *dropped_out);
 static bool advisor_preplan_current_query(Query *parse, const char *query_string);
 static bool advisor_is_online_query_command(CmdType command_type);
 static bool advisor_create_index_for_rel_att(Oid relid, AttrNumber attno);
+static bool advisor_query_mentions_column(const char *query_string,
+										  const char *column_name);
 static void advisor_query_decision_log(uint64 query_no,
 									   const char *query_string,
 									   const char *column_name,
@@ -654,17 +656,20 @@ advisor_flush_pending_query_decision(void)
 				"least_cost_with_index=%.2f\n"
 				"cost_of_creation=%.2f\n"
 				"read_cost=%.2f\n"
-				"write_maintenance_cost=%.2f\n",
+				"write_maintenance_cost=%.2f\n"
+				"best_min_cost_value=%.2f\n",
 				entry->cost_with_index,
 				entry->cost_of_creation,
 				entry->cost_read,
-				entry->cost_maintenance_write);
+				entry->cost_maintenance_write,
+				entry->cost_with_index - entry->cost_without_index);
 	else
 		fprintf(file,
 				"least_cost_with_index=not_applicable\n"
 				"cost_of_creation=not_applicable\n"
 				"read_cost=not_applicable\n"
-				"write_maintenance_cost=not_applicable\n");
+				"write_maintenance_cost=not_applicable\n"
+				"best_min_cost_value=not_applicable\n");
 
 	fprintf(file,
 			"reason=%s\n"
@@ -869,15 +874,20 @@ advisor_query_column_log(uint64 query_no,
 					 index_name != NULL ? index_name : "none");
 	if (has_costs)
 		appendStringInfo(advisor_pending_query_columns,
-						 "with_index_cost=%.2f cost_of_creation=%.2f "
+						 "without_index_cost=%.2f with_index_cost=%.2f "
+						 "cost_delta=%.2f cost_of_creation=%.2f "
 						 "read_cost=%.2f write_maintenance_cost=%.2f\n",
+						 cost_without_index,
 						 cost_with_index,
+						 cost_with_index - cost_without_index,
 						 cost_of_creation,
 						 cost_read,
 						 cost_maintenance_write);
 	else
 		appendStringInfoString(advisor_pending_query_columns,
+							   "without_index_cost=not_applicable "
 							   "with_index_cost=not_applicable "
+							   "cost_delta=not_applicable "
 							   "cost_of_creation=not_applicable "
 							   "read_cost=not_applicable "
 							   "write_maintenance_cost=not_applicable\n");
@@ -1086,6 +1096,56 @@ advisor_query_mentions_target(const char *query_string)
 	pfree(target_lower);
 	pfree(table_lower);
 	return matches;
+}
+
+static bool
+advisor_is_identifier_char(char ch)
+{
+	unsigned char uch = (unsigned char) ch;
+
+	return isalnum(uch) || ch == '_';
+}
+
+static bool
+advisor_query_mentions_column(const char *query_string,
+							  const char *column_name)
+{
+	char	   *query_lower;
+	char	   *column_lower;
+	char	   *match;
+	size_t		column_len;
+
+	if (query_string == NULL || query_string[0] == '\0' ||
+		column_name == NULL || column_name[0] == '\0')
+		return false;
+
+	query_lower = advisor_lower_cstr(query_string);
+	column_lower = advisor_lower_cstr(column_name);
+	column_len = strlen(column_lower);
+
+	match = query_lower;
+	while ((match = strstr(match, column_lower)) != NULL)
+	{
+		bool		left_boundary;
+		bool		right_boundary;
+		char		left = match == query_lower ? '\0' : *(match - 1);
+		char		right = *(match + column_len);
+
+		left_boundary = !advisor_is_identifier_char(left);
+		right_boundary = !advisor_is_identifier_char(right);
+		if (left_boundary && right_boundary)
+		{
+			pfree(query_lower);
+			pfree(column_lower);
+			return true;
+		}
+
+		match += column_len;
+	}
+
+	pfree(query_lower);
+	pfree(column_lower);
+	return false;
 }
 
 static Oid
@@ -1712,7 +1772,7 @@ advisor_cost_candidate(AdvisorColumnStat *stat,
 	result.write_maint_cost =
 		advisor_estimate_write_maint_cost(stat, row_count, settings);
 	result.expected_without_index = result.baseline_scan_cost *
-		Max(total_count, 0.0);
+		Max(activity_count, 0.0);
 	result.expected_with_index = result.create_index_cost +
 		result.hypo_scan_cost * Max(activity_count, 0.0) +
 		result.write_maint_cost;
@@ -1789,7 +1849,7 @@ advisor_cost_current_query_candidate(AdvisorColumnStat *stat,
 		advisor_estimate_btree_create_cost(row_count, relpages, settings);
 	result.write_maint_cost =
 		advisor_estimate_write_maint_cost(stat, row_count, settings);
-	result.expected_without_index = Max(total_count, 0.0) * baseline_cost;
+	result.expected_without_index = Max(activity_count, 0.0) * baseline_cost;
 	result.expected_with_index = result.create_index_cost +
 		Max(activity_count, 0.0) * result.hypo_scan_cost +
 		result.write_maint_cost;
@@ -1891,6 +1951,7 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 	bool		have_best = false;
 	uint64		best_index = 0;
 	double		best_activity_count = 0.0;
+	double		best_min_cost_value = 0.0;
 	AdvisorCostResult best_cost = {0};
 	bool		best_real_index_exists = false;
 	char	   *best_real_index_name = NULL;
@@ -2112,8 +2173,7 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 	}
 	total_accesses = total_activity_count;
 
-	threshold = Max(auto_index_advisor_min_access_fraction,
-					2.0 / Max((double) ntup, 1.0));
+	threshold = auto_index_advisor_min_access_fraction;
 	cost_settings = advisor_get_cost_settings();
 	baseline_cost = advisor_estimate_seq_scan_cost(row_count, relpages,
 												   cost_settings);
@@ -2139,6 +2199,7 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 		char	   *index_sql;
 		char	   *real_index_name = NULL;
 		bool		real_index_exists;
+		double		cost_delta = 0.0;
 		AdvisorCostResult cost_result = {0};
 
 		stats[i].access_fraction =
@@ -2237,8 +2298,11 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 														   row_count,
 														   relpages,
 														   cost_settings);
+		if (strcmp(cost_result.status, "costed") == 0)
+			cost_delta = cost_result.expected_with_index -
+				cost_result.expected_without_index;
 		advisor_logf("PREPLAN_CANDIDATE_KEEP",
-					 "PREPLAN_CANDIDATE_KEEP column=%s real_index_exists=%s all_count=%.0f all_fraction=%.4f threshold=%.4f distinct_ratio=%.4f cost_status=%s baseline_cost=%.2f hypo_scan_cost=%.2f create_cost=%.2f write_cost=%.2f expected_without_index=%.2f expected_with_index=%.2f improves_expected=%s candidate_index=%s existing_index=%s",
+					 "PREPLAN_CANDIDATE_KEEP column=%s real_index_exists=%s all_count=%.0f all_fraction=%.4f threshold=%.4f distinct_ratio=%.4f cost_status=%s baseline_cost=%.2f hypo_scan_cost=%.2f create_cost=%.2f write_cost=%.2f expected_without_index=%.2f expected_with_index=%.2f cost_delta=%.2f improves_expected=%s candidate_index=%s existing_index=%s",
 					 stats[i].column_name,
 					 real_index_exists ? "true" : "false",
 					 activity_count,
@@ -2252,6 +2316,7 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 					 cost_result.write_maint_cost,
 					 cost_result.expected_without_index,
 					 cost_result.expected_with_index,
+					 cost_delta,
 					 cost_result.improves_expected ? "true" : "false",
 					 index_name,
 					 real_index_name != NULL ? real_index_name : "");
@@ -2266,7 +2331,7 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 								 total_accesses,
 								 activity_fraction,
 								 threshold,
-								 cost_without_index,
+								 cost_result.expected_without_index,
 								 strcmp(cost_result.status, "costed") == 0,
 								 cost_result.expected_with_index,
 								 cost_result.create_index_cost,
@@ -2277,11 +2342,12 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 
 		if (strcmp(cost_result.status, "costed") == 0 &&
 			(!have_best ||
-			 cost_result.expected_with_index < best_cost.expected_with_index))
+			 cost_delta < best_min_cost_value))
 		{
 			have_best = true;
 			best_index = i;
 			best_activity_count = activity_count;
+			best_min_cost_value = cost_delta;
 			best_cost = cost_result;
 			best_real_index_exists = real_index_exists;
 			best_real_index_name = real_index_name;
@@ -2312,13 +2378,14 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 		return false;
 	}
 
-	if (best_cost.expected_with_index >= best_cost.expected_without_index)
+	if (best_min_cost_value >= 0.0)
 	{
 		advisor_logf("PREPLAN_DECISION",
-					 "PREPLAN_DECISION decision=use_normal_planner reason=without_index_cost_is_lower column=%s without_index_cost=%.2f best_with_index_cost=%.2f best_create_cost=%.2f best_read_cost=%.2f best_write_cost=%.2f",
+					 "PREPLAN_DECISION decision=use_normal_planner reason=best_min_cost_not_negative column=%s without_index_cost=%.2f best_with_index_cost=%.2f best_min_cost_value=%.2f best_create_cost=%.2f best_read_cost=%.2f best_write_cost=%.2f",
 					 stats[best_index].column_name,
 					 best_cost.expected_without_index,
 					 best_cost.expected_with_index,
+					 best_min_cost_value,
 					 best_cost.create_index_cost,
 					 best_cost.hypo_scan_cost * best_activity_count,
 					 best_cost.write_maint_cost);
@@ -2333,7 +2400,7 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 								   best_cost.hypo_scan_cost * best_activity_count,
 								   best_cost.write_maint_cost,
 								   "no_index",
-								   "without_index_cost_is_lower",
+								   "best_min_cost_not_negative",
 								   best_candidate_index_name);
 		pfree(sql.data);
 		SPI_finish();
@@ -2343,39 +2410,72 @@ advisor_preplan_current_query(Query *parse, const char *query_string)
 
 	if (best_real_index_exists)
 	{
-		advisor_logf("PREPLAN_DECISION",
-					 "PREPLAN_DECISION decision=use_existing_index column=%s existing_index=%s without_index_cost=%.2f best_with_index_cost=%.2f best_create_cost=%.2f best_read_cost=%.2f best_write_cost=%.2f",
-					 stats[best_index].column_name,
-					 best_real_index_name != NULL ? best_real_index_name : "",
-					 best_cost.expected_without_index,
-					 best_cost.expected_with_index,
-					 best_cost.create_index_cost,
-					 best_cost.hypo_scan_cost * best_activity_count,
-					 best_cost.write_maint_cost);
-		advisor_query_decision_log(query_no,
-								   query_string,
-								   stats[best_index].column_name,
-								   true,
-								   true,
-								   best_cost.expected_without_index,
-								   best_cost.expected_with_index,
-								   best_cost.create_index_cost,
-								   best_cost.hypo_scan_cost * best_activity_count,
-								   best_cost.write_maint_cost,
-								   "used_existing_index",
-								   "real_index_already_exists",
-								   best_real_index_name);
-		index_ready = true;
+		if (advisor_query_mentions_column(query_string,
+										  stats[best_index].column_name))
+		{
+			advisor_logf("PREPLAN_DECISION",
+						 "PREPLAN_DECISION decision=use_existing_index column=%s existing_index=%s without_index_cost=%.2f best_with_index_cost=%.2f best_min_cost_value=%.2f best_create_cost=%.2f best_read_cost=%.2f best_write_cost=%.2f",
+						 stats[best_index].column_name,
+						 best_real_index_name != NULL ? best_real_index_name : "",
+						 best_cost.expected_without_index,
+						 best_cost.expected_with_index,
+						 best_min_cost_value,
+						 best_cost.create_index_cost,
+						 best_cost.hypo_scan_cost * best_activity_count,
+						 best_cost.write_maint_cost);
+			advisor_query_decision_log(query_no,
+									   query_string,
+									   stats[best_index].column_name,
+									   true,
+									   true,
+									   best_cost.expected_without_index,
+									   best_cost.expected_with_index,
+									   best_cost.create_index_cost,
+									   best_cost.hypo_scan_cost * best_activity_count,
+									   best_cost.write_maint_cost,
+									   "used_existing_index",
+									   "real_index_already_exists",
+									   best_real_index_name);
+			index_ready = true;
+		}
+		else
+		{
+			advisor_logf("PREPLAN_DECISION",
+						 "PREPLAN_DECISION decision=use_normal_planner reason=existing_index_column_not_referenced_by_current_query column=%s existing_index=%s without_index_cost=%.2f best_with_index_cost=%.2f best_min_cost_value=%.2f best_create_cost=%.2f best_read_cost=%.2f best_write_cost=%.2f",
+						 stats[best_index].column_name,
+						 best_real_index_name != NULL ? best_real_index_name : "",
+						 best_cost.expected_without_index,
+						 best_cost.expected_with_index,
+						 best_min_cost_value,
+						 best_cost.create_index_cost,
+						 best_cost.hypo_scan_cost * best_activity_count,
+						 best_cost.write_maint_cost);
+			advisor_query_decision_log(query_no,
+									   query_string,
+									   stats[best_index].column_name,
+									   true,
+									   true,
+									   best_cost.expected_without_index,
+									   best_cost.expected_with_index,
+									   best_cost.create_index_cost,
+									   best_cost.hypo_scan_cost * best_activity_count,
+									   best_cost.write_maint_cost,
+									   "no_index",
+									   "existing_index_column_not_referenced_by_current_query",
+									   NULL);
+			index_ready = false;
+		}
 	}
 	else
 	{
 		const char *create_reason = "create_index_failed";
 
 		advisor_logf("PREPLAN_DECISION",
-					 "PREPLAN_DECISION decision=create_index column=%s without_index_cost=%.2f best_with_index_cost=%.2f best_create_cost=%.2f best_read_cost=%.2f best_write_cost=%.2f",
+					 "PREPLAN_DECISION decision=create_index column=%s without_index_cost=%.2f best_with_index_cost=%.2f best_min_cost_value=%.2f best_create_cost=%.2f best_read_cost=%.2f best_write_cost=%.2f",
 					 stats[best_index].column_name,
 					 best_cost.expected_without_index,
 					 best_cost.expected_with_index,
+					 best_min_cost_value,
 					 best_cost.create_index_cost,
 					 best_cost.hypo_scan_cost * best_activity_count,
 					 best_cost.write_maint_cost);
@@ -3319,8 +3419,7 @@ advisor_run_once(bool emit_log, bool force)
 	}
 	total_accesses = total_activity_count;
 
-	threshold = Max(auto_index_advisor_min_access_fraction,
-					2.0 / Max((double) ntup, 1.0));
+	threshold = auto_index_advisor_min_access_fraction;
 	cost_settings = advisor_get_cost_settings();
 
 	advisor_ensure_recommendation_table();

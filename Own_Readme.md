@@ -334,21 +334,18 @@ make -C contrib/auto_index_advisor
 sudo make -C contrib/auto_index_advisor install
 ```
 
-```bash
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   initdb -D "$PGDATA"
 fi
-```
 
-```bash
 grep -q "shared_preload_libraries.*auto_index_advisor" "$PGDATA/postgresql.conf" || \
   echo "shared_preload_libraries = 'auto_index_advisor'" >> "$PGDATA/postgresql.conf"
 
 pg_ctl -D "$PGDATA" stop -m fast || true
 pg_ctl -D "$PGDATA" -l "$PGDATA/server.log" -o "-p 5544" start
-```
 
-```bash
+
+
 psql -h localhost -p 5544 -d postgres <<'SQL'
 CREATE EXTENSION IF NOT EXISTS hypopg;
 CREATE EXTENSION IF NOT EXISTS auto_index_advisor;
@@ -364,7 +361,7 @@ ALTER SYSTEM SET auto_index_advisor.target_table = 'public.online_retail';
 ALTER SYSTEM SET auto_index_advisor.query_decision_log_file_path = '/tmp/auto_index_advisor_query_decisions.log';
 SELECT pg_reload_conf();
 SQL
-```
+
 
 Only if you want to reload the CSV fresh:
 
@@ -430,9 +427,7 @@ BEGIN
     END LOOP;
 END $$;
 SQL
-```
 
-```bash
 rm -f /tmp/auto_index_advisor_query_decisions.log
 ```
 

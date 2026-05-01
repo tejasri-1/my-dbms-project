@@ -390,7 +390,7 @@ AutoIndex_ConsiderRel(PlannerInfo *root, RelOptInfo *rel)
         elog(LOG,
              "thresholds min_access_fraction_floor=%.2f dynamic_access_fraction=%.4f min_distinct_ratio=%.2f",
              0.05,
-             Max(0.05, total_columns > 0 ? (2.0 / (double) total_columns) : 0.05),
+             0.05,
              0.0);
         AutoIndexQueryHeaderPrinted = true;
     }
@@ -1054,7 +1054,7 @@ AutoIndex_LogFormula(void)
     elog(LOG, "  per query: each referenced column increments one matching counter by 1 after execution");
     elog(LOG, "  duplicate references to the same column and same command kind in one query are counted once");
     elog(LOG, "  total_count increases by the number of applied per-column counter increments");
-    elog(LOG, "  eligible_column = access_count+update_count+insert_count+delete_count / total_count > max(0.05, 2/total_columns) AND distinct_count / row_count > 0.00");
+    elog(LOG, "  eligible_column = access_count+update_count+insert_count+delete_count / total_count > 0.05AND distinct_count / row_count > 0.00");
     elog(LOG, "  candidate selection does not require the column to appear in the current query");
     elog(LOG, "  candidate selection includes columns that already have real indexes");
     elog(LOG, "  explain_baseline_scan_cost = EXPLAIN cost with no hypothetical index, logged for comparison");
