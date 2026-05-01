@@ -867,10 +867,12 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	/*
 	 * Internal auto-index advisor: after the normal paths are available, compare
 	 * the cheapest real path with a cheap hypothetical btree estimate for
-	 * simple equality predicates.  This only records/enqueues advice; it never
+	 * base-relation predicates.  This only records/enqueues advice; it never
 	 * creates an index in the planning backend.
 	 */
+	//This is the main planner-side advisor hook. It lets the advisor inspect each base relation after normal PostgreSQL paths are available.
 	AutoIndex_ConsiderRel(root, rel);
+	//end
 }
 
 /*

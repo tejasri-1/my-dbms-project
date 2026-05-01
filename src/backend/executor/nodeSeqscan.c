@@ -32,6 +32,7 @@
 #include "executor/execScan.h"
 #include "executor/executor.h"
 #include "executor/nodeSeqscan.h"
+#include "utils/auto_indexer.h"
 #include "utils/rel.h"
 
 static TupleTableSlot *SeqNext(SeqScanState *node);
@@ -249,6 +250,9 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 		ExecOpenScanRelation(estate,
 							 node->scan.scanrelid,
 							 eflags);
+							 //This logs when PostgreSQL actually initializes a sequential scan.
+
+	AutoIndex_ObserveSeqScan(RelationGetRelid(scanstate->ss.ss_currentRelation));
 
 	/* and create slot with the appropriate rowtype */
 	ExecInitScanTupleSlot(estate, &scanstate->ss,

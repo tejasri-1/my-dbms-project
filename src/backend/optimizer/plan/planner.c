@@ -59,6 +59,7 @@
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/acl.h"
+#include "utils/auto_indexer.h"
 #include "utils/backend_status.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -137,6 +138,7 @@ typedef struct
 /* Local functions */
 static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
 static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
+static void AutoIndex_RecordModifyTouches(Query *parse);
 static void grouping_planner(PlannerInfo *root, double tuple_fraction,
 							 SetOperationStmt *setops);
 static grouping_sets_data *preprocess_grouping_sets(PlannerInfo *root);
@@ -316,6 +318,11 @@ planner(Query *parse, const char *query_string, int cursorOptions,
 		ParamListInfo boundParams, ExplainState *es)
 {
 	PlannedStmt *result;
+
+	//This means every query entering PostgreSQL planning is now registered with the advisor.
+	AutoIndex_BeginQuery(query_string, parse->commandType);
+	AutoIndex_RecordModifyTouches(parse);
+	//end
 
 	if (planner_hook)
 		result = (*planner_hook) (parse, query_string, cursorOptions,
@@ -1483,6 +1490,46 @@ preprocess_qual_conditions(PlannerInfo *root, Node *jtnode)
 	else
 		elog(ERROR, "unrecognized node type: %d",
 			 (int) nodeTag(jtnode));
+}
+
+//This means every query entering PostgreSQL planning is now registered with the advisor.
+static void
+AutoIndex_RecordModifyTouches(Query *parse)
+{
+	RangeTblEntry *rte;
+	ListCell   *lc;
+
+	if (parse == NULL)
+		return;
+
+	if (parse->commandType != CMD_INSERT &&
+		parse->commandType != CMD_UPDATE)
+		return;
+
+	if (parse->resultRelation <= 0)
+		return;
+
+	rte = rt_fetch(parse->resultRelation, parse->rtable);
+	if (rte == NULL || rte->relid == InvalidOid)
+		return;
+
+	foreach(lc, parse->targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+		AttrNumber attno;
+
+		if (tle == NULL || tle->resjunk || tle->resno <= 0)
+			continue;
+
+		attno = (AttrNumber) tle->resno;
+		if (get_attname(rte->relid, attno, false) == NULL)
+			continue;
+
+		AutoIndex_RecordTouch(rte->relid, attno,
+							  parse->commandType == CMD_INSERT ?
+							  AUTO_INDEX_TOUCH_INSERT :
+							  AUTO_INDEX_TOUCH_UPDATE);
+	}
 }
 
 /*

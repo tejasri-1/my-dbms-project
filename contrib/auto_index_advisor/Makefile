@@ -6,7 +6,7 @@ OBJS = \
 	auto_index_advisor.o
 
 EXTENSION = auto_index_advisor
-DATA = auto_index_advisor--1.0.sql
+DATA = auto_index_advisor--1.0.sql auto_index_advisor--1.1.sql auto_index_advisor--1.0--1.1.sql
 PGFILEDESC = "auto_index_advisor - background worker for online index-advisor observation"
 
 ifdef USE_PGXS

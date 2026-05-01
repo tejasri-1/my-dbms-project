@@ -506,8 +506,9 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	ExecEndPlan(queryDesc->planstate, estate);
 
 	//added line
+	//This flushes advisor stats, writes logs, persists column stats, and ends the query-tracking state.
 	AutoIndex_Print();
-
+		
 	/* do away with our snapshots */
 	UnregisterSnapshot(estate->es_snapshot);
 	UnregisterSnapshot(estate->es_crosscheck_snapshot);
